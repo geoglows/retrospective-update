@@ -1,0 +1,28 @@
+name: add_week
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - awscli
+  - libgcc-ng
+  - python>=3.8
+  - s5cmd
+  - aiobotocore
+  - boto3
+  - cftime
+  - dask
+  - distributed
+  - flox
+  - h5netcdf
+  - h5py
+  - natsort
+  - netcdf4
+  - numpy
+  - pandas
+  - psutil
+  - rechunker
+  - requests
+  - s3fs
+  - scipy
+  - xarray
+  - zarr
