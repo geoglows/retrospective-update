@@ -1,23 +1,50 @@
-import os, glob, subprocess, logging, multiprocessing, datetime, traceback
+import datetime
+import glob
+import logging
+import multiprocessing
+import os
+import subprocess
+import traceback
 
-import xarray as xr
 import numpy as np
-import s3fs
 import psutil
+import s3fs
+import xarray as xr
 
-from generate_namelist import rapid_namelist_from_directories
-from inflow import create_inflow_file
 from append import append_week
 from cloud_logger import CloudLog
+from generate_namelist import rapid_namelist_from_directories
+from inflow import create_inflow_file
 
 logging.basicConfig(level=logging.INFO,
                     filename='log.log',
                     format='%(asctime)s - %(levelname)s - %(message)s')
-S5CMD = 's5cmd'
+
+GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
+GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
+GEOGLOWS_ODP_REGION = 'us-west-2'
+
+GEOGLOWS_ODP_CONFIGS = 's3://geoglows-v2/configs'
+
+CL = CloudLog()
+s3 = s3fs.S3FileSystem()
+
+# HOME = os.getenv('HOME')
+HOME = os.getcwd()
+
+# The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
+volume_directory = os.getenv('VOLUME_DIR')
+# Zarr located on S3
+s3_zarr = os.getenv('S3_ZARR')
+# Directory containing subdirectories, containing Qfinal files
+qfinal_dir = os.getenv('QFINAL_DIR')
+# Directory containing the ERA5 data
+ERA_DIR = os.getenv('ERA_DIR')
+# Local zarr to append to
+local_zarr = os.path.join(volume_directory, os.getenv('LOCAL_ZARR_NAME'))  # Local zarr to append to
 
 
 def inflow_and_namelist(
-        working_dir: str,
         namelist_dir: str,
         nc: str,
         vpu_dirs: list[str]) -> None:
@@ -25,7 +52,6 @@ def inflow_and_namelist(
     Generate inflow files and namelist files for each VPU directory.
 
     Args:
-        working_dir (str): The working directory.
         namelist_dir (str): The directory to store the namelist files.
         nc (str): The path to the nc file.
         vpu_dirs (list[str]): A list of VPU directories.
@@ -39,8 +65,8 @@ def inflow_and_namelist(
             continue
         vpu = os.path.basename(vpu_dir)
 
-        inflow_dir = os.path.join(working_dir, 'data', 'inflows', vpu)
-        output_dir = os.path.join(working_dir, 'data', 'outputs', vpu)
+        inflow_dir = os.path.join(HOME, 'data', 'inflows', vpu)
+        output_dir = os.path.join(HOME, 'data', 'outputs', vpu)
         init = glob.glob(os.path.join(output_dir, 'Qfinal*.nc'))[0]
 
         create_inflow_file(
@@ -61,16 +87,14 @@ def inflow_and_namelist(
 
         # Correct the paths in the namelist file
         with open(namelist, 'r') as f:
-            text = f.read().replace(working_dir, '/mnt')
+            text = f.read().replace(HOME, '/mnt')
         with open(namelist, 'w') as f:
             f.write(text)
 
 
 def get_initial_qinits(s3: s3fs.S3FileSystem,
-                       vpu_dirs: list[str],
                        qfinal_dir: str,
-                       working_dir: str,
-                       last_retro_time: np.datetime64) -> None:
+                       last_retro_time: np.datetime64, ) -> None:
     """
     Get q initialization files from S3.
 
@@ -78,7 +102,6 @@ def get_initial_qinits(s3: s3fs.S3FileSystem,
     - s3: An instance of s3fs.S3FileSystem for accessing S3.
     - vpu_dirs: A list of VPU directories.
     - qfinal_dir: The directory in S3 where the Qfinal files are stored.
-    - working_dir: The local working directory.
     - last_retro_time: The last retro time as a numpy datetime64 object.
 
     Raises:
@@ -88,7 +111,7 @@ def get_initial_qinits(s3: s3fs.S3FileSystem,
     - None
     """
     last_retro_time: str = np.datetime_as_string(last_retro_time, unit='D').replace('-', '')
-    local_qfinals = glob.glob(os.path.join(working_dir, 'data', 'outputs', '*', '*Qfinal*.nc'))
+    local_qfinals = glob.glob(os.path.join(HOME, 'data', 'outputs', '*', '*Qfinal*.nc'))
     # If we don't have 125 qfinal files or the qfinal files we do have are not the latest, pull from s3.
     if len(local_qfinals) != 125 or (
             len(local_qfinals) > 0 and os.path.basename(local_qfinals[0]).split('_')[-1].split('.')[
@@ -99,20 +122,18 @@ def get_initial_qinits(s3: s3fs.S3FileSystem,
         if len(s3_qfinals) != 125:
             raise FileNotFoundError(f"Expected 125 Qfinal files in {qfinal_dir}, got {len(s3_qfinals)}")
 
-        for f in glob.glob(os.path.join(working_dir, 'data', 'outputs', '*', '*Qfinal*.nc')):
+        for f in glob.glob(os.path.join(HOME, 'data', 'outputs', '*', '*Qfinal*.nc')):
             os.remove(f)
         logging.info('Pulling qfinal files from s3')
         for s3_file in s3_qfinals:
             vpu = os.path.basename(s3_file).split('_')[1]
-            os.makedirs(os.path.join(working_dir, 'data', 'outputs', vpu), exist_ok=True)
+            os.makedirs(os.path.join(HOME, 'data', 'outputs', vpu), exist_ok=True)
             with s3.open(s3_file, 'rb') as s3_f:
-                with open(os.path.join(working_dir, 'data', 'outputs', vpu, os.path.basename(s3_file)),
-                          'wb') as local_f:
+                with open(os.path.join(HOME, 'data', 'outputs', vpu, os.path.basename(s3_file)), 'wb') as local_f:
                     local_f.write(s3_f.read())
 
 
 def cache_to_s3(s3: s3fs.S3FileSystem,
-                working_dir: str,
                 s3_path: str,
                 delete_all: bool = False) -> None:
     """
@@ -120,12 +141,11 @@ def cache_to_s3(s3: s3fs.S3FileSystem,
 
     Args:
         s3 (s3fs.S3FileSystem): An instance of the S3FileSystem class for S3 access.
-        working_dir (str): The path to the working directory.
         s3_path (str): The S3 path where the files will be uploaded.
         delete_all (bool, optional): If True, deletes all qfinal files. Defaults to False.
     """
 
-    vpu_dirs = glob.glob(os.path.join(working_dir, 'data', 'outputs', '*'))
+    vpu_dirs = glob.glob(os.path.join(HOME, 'data', 'outputs', '*'))
     for vpu_dir in vpu_dirs:
         # Delete the earliest qfinal, upload the latest qfinal
         qfinals = [f for f in glob.glob(os.path.join(vpu_dir, 'Qfinal*.nc'))]
@@ -180,33 +200,30 @@ def upload_to_s3(s3: s3fs.S3FileSystem,
             sf.write(f.read())
 
 
-def cleanup(working_dir: str,
-            qfinal_dir: str,
+def cleanup(qfinal_dir: str,
             delete_all: bool = False) -> None:
     """
     Cleans up the working directory by deleting namelists, inflow files, and
     caching qfinals and qouts.
 
     Args:
-        working_dir (str): The path to the working directory.
         qfinal_dir (str): The path to the qfinal directory.
         delete_all (bool, optional): If True, deletes all files in the qfinal
             directory. Defaults to False.
     """
     # Delete namelists
-    for file in glob.glob(os.path.join(working_dir, 'data', 'namelists', '*')):
+    for file in glob.glob(os.path.join(HOME, 'data', 'namelists', '*')):
         os.remove(file)
 
     # Delete inflow files
-    for f in glob.glob(os.path.join(working_dir, 'data', 'inflows', '*', '*.nc')):
+    for f in glob.glob(os.path.join(HOME, 'data', 'inflows', '*', '*.nc')):
         os.remove(f)
 
     # Cache qfinals and qouts, remove
-    cache_to_s3(s3fs.S3FileSystem(), working_dir, qfinal_dir, delete_all)
+    cache_to_s3(s3fs.S3FileSystem(), qfinal_dir, delete_all)
 
 
-def sync_local_to_s3(local_zarr: str,
-                     s3_zarr: str) -> None:
+def sync_local_to_s3(local_zarr: str, s3_zarr: str) -> None:
     """
     Embarrassingly fast sync zarr to S3 (~3 minutes for 150k files). 
     Note we only sink necessary files: all Qout/1.*, time/*, and all . files in the zarr
@@ -218,7 +235,6 @@ def sync_local_to_s3(local_zarr: str,
     Raises:
         Exception: If the sync command fails.
     """
-    global S5CMD
     # all . files in the top folder (.zgroup, .zmetadata), and all . files in the Qout var n(.zarray)
     files_to_upload = glob.glob(os.path.join(local_zarr, '.*')) + glob.glob(os.path.join(local_zarr, 'Qout', '.*'))
     command = ""
@@ -228,9 +244,9 @@ def sync_local_to_s3(local_zarr: str,
         else:
             # Otherwise, upload to the top-level folder
             destination = s3_zarr
-        command += f"{S5CMD} cp {f} {destination}/\n"
-    command += f"{S5CMD} sync --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/\n"
-    command += f"{S5CMD} sync --size-only {local_zarr}/time/ {s3_zarr}/time/"
+        command += f"s5cmd cp {f} {destination}/\n"
+    command += f"s5cmd sync --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/\n"
+    command += f"s5cmd sync --size-only {local_zarr}/time/ {s3_zarr}/time/"
 
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
 
@@ -242,21 +258,15 @@ def sync_local_to_s3(local_zarr: str,
         raise Exception(result.stderr)
 
 
-def setup_configs(working_directory: str, configs_dir: str) -> None:
+def setup_configs() -> None:
     """
     Setup all the directories we need, populate files
-
-    Args:
-        working_directory (str): The working directory where the directories will be created.
-        configs_dir (str): The directory containing the config files to be synced.
-
-    Returns:
-        None
     """
-    c_dir = os.path.join(working_directory, 'data', 'configs')
+    c_dir = os.path.join(HOME, 'data', 'configs')
     os.makedirs(c_dir, exist_ok=True)
     if len(glob.glob(os.path.join(c_dir, '*', '*.csv'))) == 0:
-        result = subprocess.run(f"aws s3 sync {configs_dir} {c_dir}", shell=True, capture_output=True, text=True)
+        result = subprocess.run(f"aws s3 sync {GEOGLOWS_ODP_CONFIGS} {c_dir}", shell=True, capture_output=True,
+                                text=True)
         if result.returncode == 0:
             logging.info("Obtained config files")
         else:
@@ -283,47 +293,37 @@ def date_sort(s: str) -> datetime.datetime:
 def check_installations() -> None:
     """
     Check that the following are installed:
-    - aws cli
+    - awscli
     - s5cmd
     - docker
-
-    Raises:
-        NotInstalled: If any of the required installations are not found.
     """
-    global S5CMD
-
-    class NotInstalled(Exception):
-        pass
-
     try:
         subprocess.run(['aws', '--version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError:
-        raise NotInstalled(
-            'Please install the AWS cli: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html')
+    except Exception as e:
+        raise RuntimeError('Please install the AWS cli: conda install -c conda-forge awscli')
 
     try:
-        subprocess.run([S5CMD, 'version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except FileNotFoundError as e:
-        S5CMD = os.environ['CONDA_PREFIX']
-        if 'envs' not in S5CMD:
-            S5CMD = os.environ['CONDA_PREFIX_1'] or os.environ['CONDA_PREFIX_2']
-            if 'envs' not in S5CMD:
-                raise e
-        S5CMD = os.path.join(S5CMD, 'bin', 's5cmd')
-        subprocess.run([S5CMD, 'version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError:
-        raise NotInstalled('Please install s5cmd: `conda install s5cmd`')
+        subprocess.run(['s5cmd', 'version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        raise RuntimeError('Please install s5cmd: `conda install -c conda-forge s5cmd`')
 
     try:
         subprocess.run(['docker', '--version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError:
-        raise NotInstalled('Please install docker, and run "docker pull chdavid/rapid"')
+    except Exception as e:
+        raise RuntimeError('Please install docker, and run "docker pull chdavid/rapid"')
+
+    if not os.path.exists(local_zarr):
+        logging.error(f"{local_zarr} does not exist!")
+        CL.log_message('FAIL', f"{local_zarr} does not exist!")
+        exit()
+    if not os.path.exists(os.path.join(HOME, 'data', 'runrapid.py')):
+        msg = f"Please put 'runrapid.py' in {HOME}/data so that RAPID may use it"
+        logging.error(msg)
+        CL.log_message('FAIL', msg)
+        exit()
 
 
-def main(working_dir: str,
-         retro_zarr: str,
-         nc: str,
-         cl: CloudLog) -> None:
+def main(retro_zarr: str, nc: str, ) -> None:
     """
     Assumes docker is installed and this command was run: docker pull chdavid/rapid.
     Assumes AWS CLI and s5cmd are likewise installed. 
@@ -331,7 +331,6 @@ def main(working_dir: str,
     Executes the main workflow for running the RAPID model.
 
     Args:
-        working_dir (str): The path to the working directory.
         retro_zarr (str): The path to the retro zarr dataset.
         nc (str): The path to the nc file.
 
@@ -341,95 +340,63 @@ def main(working_dir: str,
     Returns:
         None
     """
-    a_qfinal = glob.glob(os.path.join(working_dir, 'data', 'outputs', '*', '*Qfinal*.nc'))[0]
-    cl.add_qinit(datetime.datetime.strptime(os.path.basename(a_qfinal).split('_')[2].split('.')[0], '%Y%m%d'))
+    a_qfinal = glob.glob(os.path.join(HOME, 'data', 'outputs', '*', '*Qfinal*.nc'))[0]
+    CL.add_qinit(datetime.datetime.strptime(os.path.basename(a_qfinal).split('_')[2].split('.')[0], '%Y%m%d'))
 
     # For inflows files and multiprocess, for each 1GB of runoff data, we need ~ 6GB for peak memory consumption. Otherwise, some m3 files will never be written and no error is raised
     processes = min(multiprocessing.cpu_count(), round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(nc) * 6)))
     logging.info(f"Using {processes} processes for inflows")
-    cl.log_message('RUNNING', f"Using {processes} processes for inflows")
+    CL.log_message('RUNNING', f"Using {processes} processes for inflows")
     worker_lists = [config_vpu_dirs[i:i + processes] for i in range(0, len(config_vpu_dirs), processes)]
     with multiprocessing.Pool(processes) as pool:
         pool.starmap(inflow_and_namelist,
-                     [(working_dir, os.path.join(working_dir, 'data', 'namelists'), nc, w) for w in worker_lists])
+                     [(HOME, os.path.join(HOME, 'data', 'namelists'), nc, w) for w in worker_lists])
 
-    if len(glob.glob(os.path.join(working_dir, 'data', 'inflows', '*', 'm3*.nc'))) != 125:
+    if len(glob.glob(os.path.join(HOME, 'data', 'inflows', '*', 'm3*.nc'))) != 125:
         raise FileNotFoundError('Not all of the m3 files were generated!!!')
 
     # Run rapid
     logging.info('Running rapid')
-    cl.log_message('RUNNING', 'Running RAPID')
+    CL.log_message('RUNNING', 'Running RAPID')
     rapid_result = subprocess.run(
-        [f'sudo docker run --rm --name rapid --mount type=bind,source={os.path.join(working_dir, "data")},target=/mnt/data \
-                        chdavid/rapid python3 /mnt/data/runrapid.py --rapidexec /home/rapid/src/rapid --namelistsdir /mnt/data/namelists'],
+        [f'sudo docker run --rm --name rapid --mount type=bind,source={os.path.join(HOME, "data")},target=/mnt chdavid/rapid python3 /mnt/runrapid.py'],
         shell=True,
         capture_output=True,
-        text=True)
+        text=True
+    )
 
     if rapid_result.returncode != 0:
-        class RapidError(Exception):
-            pass
-
-        raise RapidError(rapid_result.stderr)
+        raise RuntimeError(rapid_result.stderr)
 
     logging.info(rapid_result.stdout)
 
     # Build the week dataset
-    qouts = glob.glob(os.path.join(working_dir, 'data', 'outputs', '*', 'Qout*.nc'))
+    qouts = glob.glob(os.path.join(HOME, 'data', 'outputs', '*', 'Qout*.nc'))
 
     with xr.open_mfdataset(qouts,
                            combine='nested',
                            concat_dim='rivid',
                            preprocess=drop_coords, ).reindex(rivid=xr.open_zarr(retro_zarr)['rivid']) as ds:
 
-        cl.log_message('RUNNING',
+        CL.log_message('RUNNING',
                        f'Appending to zarr: {np.datetime_as_string(ds.time[0].values, unit='h')} to {np.datetime_as_string(ds.time[-1].values, unit='h')}')
         append_week(ds, retro_zarr)
 
 
 if __name__ == '__main__':
     try:
-        cl = CloudLog()
-        s3 = s3fs.S3FileSystem()
-
-        working_directory = os.getcwd()
-        # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
-        volume_directory = os.getenv('VOLUME_DIR')
-        # Zarr located on S3
-        s3_zarr = os.getenv('S3_ZARR')
-        # Directory containing subdirectories, containing Qfinal files
-        qfinal_dir = os.getenv('QFINAL_DIR')
-        # Directory containing subdirectories, containing the files to run RAPID. Only needed if running this for the first time
-        configs_dir = os.getenv('CONFIGS_DIR')
-        # Directory containing the ERA5 data
-        era_dir = os.getenv('ERA_DIR')
-        # Local zarr to append to
-        local_zarr = os.getenv('LOCAL_ZARR')
-
-        local_zarr = os.path.join(volume_directory, local_zarr)  # Local zarr to append to
-
-        if not os.path.exists(local_zarr):
-            logging.error(f"{local_zarr} does not exist!")
-            cl.log_message('FAIL', f"{local_zarr} does not exist!")
-            exit()
-        if not os.path.exists(os.path.join(working_directory, 'data', 'runrapid.py')):
-            msg = f"Please put 'runrapid.py' in {working_directory}/data so that RAPID may use it"
-            logging.error(msg)
-            cl.log_message('FAIL', msg)
-            exit()
-
         check_installations()
-        setup_configs(working_directory, configs_dir)
-        cleanup(working_directory, qfinal_dir)
-        config_vpu_dirs = glob.glob(os.path.join(working_directory, 'data', 'configs', '*'))
+        setup_configs()
+        cleanup(qfinal_dir)
+        config_vpu_dirs = glob.glob(os.path.join(HOME, 'data', 'configs', '*'))
         last_retro_time = xr.open_zarr(local_zarr)['time'][-1].values
-        get_initial_qinits(s3, config_vpu_dirs, qfinal_dir, working_directory, last_retro_time)
+        get_initial_qinits(s3, qfinal_dir, last_retro_time)
 
-        ncs = sorted(s3.glob(f"{era_dir}/*.nc"), key=date_sort)  # Sorted, so that we append correctly by date
+        ncs = sorted(s3.glob(f"{ERA_DIR}/*.nc"), key=date_sort)  # Sorted, so that we append correctly by date
         if not ncs:
-            logging.error(f"Could not find any .nc files in {era_dir}")
-            raise FileNotFoundError(f"Could not find any .nc files in {era_dir}")
-        cl.log_message('START', f"Appending {len(ncs)} ERA5 file(s) to {local_zarr}")
+            logging.error(f"Could not find any .nc files in {ERA_DIR}")
+            raise FileNotFoundError(f"Could not find any .nc files in {ERA_DIR}")
+        CL.log_message('START', f"Appending {len(ncs)} ERA5 file(s) to {local_zarr}")
         for i, era_nc in enumerate(ncs):
             with s3.open(era_nc, 'rb') as s3_file:
                 local_era5_nc = os.path.basename(era_nc)
@@ -440,27 +407,27 @@ if __name__ == '__main__':
             era_time = xr.open_dataset(local_era5_nc)['time'].values
             first_era_time = era_time[0].values
             last_retro_time = xr.open_zarr(local_zarr)['time'][-1].values
-            cl.add_last_date(last_retro_time)
+            CL.add_last_date(last_retro_time)
             try:
-                cl.add_time_period(era_time)
+                CL.add_time_period(era_time)
             except:
                 logging.warning(f"Could not add time period to cloud log for {era_time}")
             if last_retro_time + np.timedelta64(1, 'D') != first_era_time:
                 raise ValueError(
                     f"Time mismatch between {local_era5_nc} and {local_zarr}: got {first_era_time} and {last_retro_time} respectively (the era file should be 1 day behind the zarr). Please check the time in the .nc file and the zarr.")
 
-            main(working_directory, local_zarr, local_era5_nc, cl)
+            main(local_zarr, local_era5_nc)
             if i + 1 < len(ncs):  # Log each time we will run again, except for the last time
-                cl.log_message('RUNNING AGAIN')
+                CL.log_message('RUNNING AGAIN')
             os.remove(local_era5_nc)
             s3.rm_file(era_nc)
-            cleanup(working_directory, qfinal_dir)
+            cleanup(qfinal_dir)
 
         # At last, sync to S3
         sync_local_to_s3(local_zarr, s3_zarr)
-        cleanup(working_directory, qfinal_dir)
-        cl.log_message('COMPLETE')
+        cleanup(qfinal_dir)
+        CL.log_message('COMPLETE')
     except Exception as e:
         error = traceback.format_exc()
         logging.error(error)
-        cl.log_message('FAIL', error)
+        CL.log_message('FAIL', error)
