@@ -290,7 +290,7 @@ if __name__ == "__main__":
         retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3, check=False)
         download_era5(working_directory, retro_zarr, s3_bucket, mnt_dir,cl)
 
-        ec2 = boto3.client('ec2', region_name = "us-west-2")
+        ec2 = boto3.client('ec2', region_name=region_name)
         ec2.start_instances(InstanceIds=[other_instance])
         cl.log_message('FINISHED')
     except Exception as e:
