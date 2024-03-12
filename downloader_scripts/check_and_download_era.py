@@ -83,7 +83,7 @@ def download_era5(working_dir: str,
     cl.add_last_date(last_date)
 
     # run_again = False
-    if pd.to_datetime(last_date + np.timedelta64(14, 'D')) > datetime.now():
+    if pd.to_datetime(last_date + np.timedelta64(7, 'D')) > datetime.now():
         # If the last date in the zarr file is within 2 weeks of today, then prohibit the script from continuing
         # since the ECMWF has a lag time of 6 days ish (a week for rounding)
         cl.log_message(f'{last_date} is within two weeks of today. Not running')
