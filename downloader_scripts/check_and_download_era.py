@@ -28,6 +28,20 @@ region_name = os.getenv('REGION_NAME')
 s3_bucket = os.getenv('S3_BUCKET')
 s3_zarr_name = os.getenv('S3_ZARR_NAME')
 compute_instance = os.getenv('OTHER_INSTANCE')
+ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
+REGION = os.getenv('AWS_REGION')
+
+CL = CloudLog()
+
+# print all the stuff from the environment variables
+print(f'region_name: {region_name}')
+print(f's3_bucket: {s3_bucket}')
+print(f's3_zarr_name: {s3_zarr_name}')
+print(f'compute_instance: {compute_instance}')
+print(f'ACCESS_KEY_ID: {ACCESS_KEY_ID}')
+print(f'SECRET_ACCESS_KEY: {SECRET_ACCESS_KEY}')
+print(f'REGION: {REGION}')
 
 
 class DownloadWorker(Thread):
@@ -58,36 +72,37 @@ class DownloadWorker(Thread):
                 self.queue.task_done()
 
 
-def download_era5(retro_zarr: str,
-                  era5_bucket: s3fs.S3FileSystem,
-                  cl: CloudLog) -> None:
+def download_era5() -> None:
     """
     Downloads era5 runoff data. Logs to the CloudLog class. 
     Converts hourly runoff to daily. 
-
-    Parameters:
-    - retro_zarr (str): The path to the retrospective zarr file.
-    - era5_bucket (str): The S3 bucket where the downloaded data will be stored.
-    - cl (CloudLog): An instance of the CloudLog class for logging.
-
-    Returns:
-    - None
     """
     era_dir = os.path.join(MNT_DIR, 'era5_data')
     os.makedirs(era_dir, exist_ok=True)
 
+    print('connecting to CDS')
     c = cdsapi.Client()
 
+    print('connecting to ODP')
+    bucket_uri = os.path.join(GEOGLOWS_ODP_RETROSPECTIVE_BUCKET, GEOGLOWS_ODP_RETROSPECTIVE_ZARR)
+    s3_odp = s3fs.S3FileSystem(anon=True, client_kwargs=dict(region_name=GEOGLOWS_ODP_REGION))
+    retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3_odp, check=False)
+
+    print('connecting to S3')
+    s3_era5 = boto3.client('s3', aws_access_key_id=ACCESS_KEY_ID, aws_secret_access_key=SECRET_ACCESS_KEY)
+
+    print('checking last date')
     try:
         last_date = xr.open_zarr(retro_zarr)['time'][-1].values
     except IndexError:
         last_date = xr.open_zarr(retro_zarr)['time'].values
-    cl.add_last_date(last_date)
+    print(last_date)
+    CL.add_last_date(last_date)
 
     # run_again = False
     if pd.to_datetime(last_date + np.timedelta64(MIN_LAG_TIME_DAYS, 'D')) > datetime.now():
         # If the last date in the zarr file is within MIN_LAG_TIME_DAYS of today then exit
-        cl.log_message(f'{last_date} is within {MIN_LAG_TIME_DAYS} days of today. Not running')
+        CL.log_message(f'{last_date} is within {MIN_LAG_TIME_DAYS} days of today. Not running')
         return
 
     last_date = pd.to_datetime(last_date)
@@ -101,10 +116,11 @@ def download_era5(retro_zarr: str,
     if len(times_to_download[-1]) < MIN_LAG_TIME_DAYS:
         times_to_download.pop(-1)
 
-    cl.add_time_period(date_range.tolist())
-    cl.log_message('RUNNING', "Beginning download")
+    CL.add_time_period(date_range.tolist())
+    CL.log_message('RUNNING', "Beginning download")
     max_weeks = 200  # 50 weeks buffer gives 20 GB extra space
     times_to_download_split = [times_to_download[i:i + max_weeks] for i in range(0, len(times_to_download), max_weeks)]
+    print(f'time_to_download_split: {times_to_download_split}')
     for times_to_download in times_to_download_split:
         requests = []
         num_requests = 0
@@ -126,15 +142,18 @@ def download_era5(retro_zarr: str,
         num_processes = min(num_requests, os.cpu_count() * 8)
 
         queue = Queue()
+        print(f'num_processes: {num_processes}')
         for _ in range(num_processes):
             worker = DownloadWorker(queue)
             worker.daemon = True
             worker.start()
+        print(f'requests: {requests}')
         for request in requests:
             queue.put(request)
         queue.join()
 
-        # # Check that the number of files downloaded match the number of requests
+        # Check that the number of files downloaded match the number of requests
+        print(ncs)
         ncs = sorted(glob.glob(os.path.join(era_dir, '*.nc')), key=date_sort)
 
         netcdf_pairs = []
@@ -150,17 +169,20 @@ def download_era5(retro_zarr: str,
                 netcdf_pairs.append([nc, ncs[ncs.index(nc) + 1]])
                 skip = True
 
+        print(f'netcdf_pairs: {netcdf_pairs}')
         for ncs_to_use in netcdf_pairs:
             with dask.config.set(**{'array.slicing.split_large_chunks': False}):
                 ds = (
                     xr
-                    .open_mfdataset(ncs_to_use,
-                                    concat_dim='time',
-                                    combine='nested',
-                                    parallel=True,
-                                    chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
-                                    # Chunk to prevent weird Slicing behavior and missing data
-                                    preprocess=process_expver_variable)
+                    .open_mfdataset(
+                        ncs_to_use,
+                        concat_dim='time',
+                        combine='nested',
+                        parallel=True,
+                        chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
+                        # Chunk to prevent weird Slicing behavior and missing data
+                        preprocess=process_expver_variable
+                    )
                     .sortby('time')
                     .groupby('time.date')
                     .sum(dim='time')  # Convert to daily
@@ -189,7 +211,10 @@ def download_era5(retro_zarr: str,
                 outname += f"{nc_days[0]}-{ncs_to_use[1].split('_')[4].split('.')[0].split('-')[-1]}.nc"
             else:
                 outname = os.path.basename(ncs_to_use)
-            era5_bucket.put('temp.nc', s3_bucket + '/era_5/' + outname)
+            print(f'outname: {outname}')
+            print(s3_bucket + '/era_5/' + outname)
+            s3_era5.upload_file('temp.nc', s3_bucket, f'{outname}')
+            print('uploaded')
 
             # Remove uncombined netcdfs
             if isinstance(ncs_to_use, str):
@@ -283,19 +308,13 @@ if __name__ == "__main__":
     """
     We assume the the volume already has a file system and data (the treospective zarr)
     """
-    cl = CloudLog()
     try:
-        bucket_uri = os.path.join(GEOGLOWS_ODP_RETROSPECTIVE_BUCKET, GEOGLOWS_ODP_RETROSPECTIVE_ZARR)
-        s3_odp = s3fs.S3FileSystem(anon=False, client_kwargs=dict(region_name=GEOGLOWS_ODP_REGION))
-        retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3_odp, check=False)
-
-        s3_era5 = s3fs.S3FileSystem(anon=False, client_kwargs=dict(region_name=region_name))
-        era5_bucket = s3fs.S3Map(root=s3_bucket, s3=s3_era5, check=False)
-
-        download_era5(retro_zarr, era5_bucket, cl)
+        print('Starting')
+        download_era5()
 
         ec2 = boto3.client('ec2', region_name=region_name)
         ec2.start_instances(InstanceIds=[compute_instance])
-        cl.log_message('FINISHED')
+        CL.log_message('FINISHED')
     except Exception as e:
-        cl.log_message('FAIL', traceback.format_exc())
+        print(traceback.format_exc())
+        CL.log_message('FAIL', traceback.format_exc())
