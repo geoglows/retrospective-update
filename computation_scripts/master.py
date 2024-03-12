@@ -43,18 +43,20 @@ def inflow_and_namelist(
         output_dir = os.path.join(working_dir, 'data', 'outputs', vpu)
         init = glob.glob(os.path.join(output_dir, 'Qfinal*.nc'))[0]
 
-        create_inflow_file(nc,
-                           vpu_dir,
-                           inflow_dir,
-                           vpu,
-                           )
+        create_inflow_file(
+            nc,
+            vpu_dir,
+            inflow_dir,
+            vpu,
+        )
 
-        rapid_namelist_from_directories(vpu_dir,
-                                        inflow_dir,
-                                        namelist_dir,
-                                        output_dir,
-                                        qinit_file=init
-                                        )
+        rapid_namelist_from_directories(
+            vpu_dir,
+            inflow_dir,
+            namelist_dir,
+            output_dir,
+            qinit_file=init
+        )
         namelist = glob.glob(os.path.join(namelist_dir, f'namelist_{vpu}*'))[0]
 
         # Correct the paths in the namelist file
@@ -97,7 +99,8 @@ def get_initial_qinits(s3: s3fs.S3FileSystem,
         if len(s3_qfinals) != 125:
             raise FileNotFoundError(f"Expected 125 Qfinal files in {qfinal_dir}, got {len(s3_qfinals)}")
 
-        {os.remove(f) for f in glob.glob(os.path.join(working_dir, 'data', 'outputs', '*', '*Qfinal*.nc'))}
+        for f in glob.glob(os.path.join(working_dir, 'data', 'outputs', '*', '*Qfinal*.nc')):
+            os.remove(f)
         logging.info('Pulling qfinal files from s3')
         for s3_file in s3_qfinals:
             vpu = os.path.basename(s3_file).split('_')[1]
@@ -125,11 +128,14 @@ def cache_to_s3(s3: s3fs.S3FileSystem,
     vpu_dirs = glob.glob(os.path.join(working_dir, 'data', 'outputs', '*'))
     for vpu_dir in vpu_dirs:
         # Delete the earliest qfinal, upload the latest qfinal
-        qfinals = sorted([f for f in glob.glob(os.path.join(vpu_dir, 'Qfinal*.nc'))],
+        qfinals = [f for f in glob.glob(os.path.join(vpu_dir, 'Qfinal*.nc'))]
+        qfinals = sorted(qfinals,
                          key=lambda x: datetime.datetime.strptime(os.path.basename(x).split('_')[-1].split('.')[0],
                                                                   '%Y%m%d'))
+
         if delete_all:
-            {os.remove(f) for f in qfinals}
+            for f in qfinals:
+                os.remove(f)
         elif len(qfinals) == 2:
             os.remove(qfinals[0])
             upload_to_s3(s3, qfinals[1], f'{s3_path}/{os.path.basename(vpu_dir)}/{os.path.basename(qfinals[1])}')
@@ -387,14 +393,18 @@ if __name__ == '__main__':
         s3 = s3fs.S3FileSystem()
 
         working_directory = os.getcwd()
-        volume_directory = os.getenv(
-            'VOLUME_DIR')  # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
-        s3_zarr = os.getenv('S3_ZARR')  # Zarr located on S3
-        qfinal_dir = os.getenv('QFINAL_DIR')  # Directory containing subdirectories, containing Qfinal files
-        configs_dir = os.getenv(
-            'CONFIGS_DIR')  # Directory containing subdirectories, containing the files to run RAPID. Only needed if running this for the first time
-        era_dir = os.getenv('ERA_DIR')  # Directory containing the ERA5 data
-        local_zarr = os.getenv('LOCAL_ZARR')  # Local zarr to append to
+        # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
+        volume_directory = os.getenv('VOLUME_DIR')
+        # Zarr located on S3
+        s3_zarr = os.getenv('S3_ZARR')
+        # Directory containing subdirectories, containing Qfinal files
+        qfinal_dir = os.getenv('QFINAL_DIR')
+        # Directory containing subdirectories, containing the files to run RAPID. Only needed if running this for the first time
+        configs_dir = os.getenv('CONFIGS_DIR')
+        # Directory containing the ERA5 data
+        era_dir = os.getenv('ERA_DIR')
+        # Local zarr to append to
+        local_zarr = os.getenv('LOCAL_ZARR')
 
         local_zarr = os.path.join(volume_directory, local_zarr)  # Local zarr to append to
 
