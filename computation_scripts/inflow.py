@@ -31,7 +31,7 @@ def _memory_check(size: int, dtype: type = np.float32, ram_buffer_percentage: fl
 
 
 def _cumulative_to_incremental(df) -> pd.DataFrame:
-    #logging.info('Converting to incremental values')
+    # logging.info('Converting to incremental values')
     return pd.DataFrame(
         np.vstack([df.values[0, :], np.diff(df.values, axis=0)]),
         index=df.index,
@@ -40,8 +40,9 @@ def _cumulative_to_incremental(df) -> pd.DataFrame:
 
 
 def _incremental_to_cumulative(df) -> pd.DataFrame:
-    #logging.info('Converting to cumulative values')
+    # logging.info('Converting to cumulative values')
     return df.cumsum()
+
 
 def create_inflow_file(lsm_data: str,
                        input_dir: str,
@@ -123,7 +124,7 @@ def create_inflow_file(lsm_data: str,
             if not len(weight_table):
                 raise FileNotFoundError(f'Could not find a weight table in {input_dir} with shape {dataset_shape}')
             weight_table = weight_table[0]
-            #logging.info(f'Using weight table: {weight_table}')
+            # logging.info(f'Using weight table: {weight_table}')
         # check that the grid dimensions are found in the weight table filename
         matches = re.findall(r'(\d+)x(\d+)', weight_table)[0]
         if len(matches) != 2:
@@ -173,10 +174,10 @@ def create_inflow_file(lsm_data: str,
             raise ValueError(f"Unknown units: {ds.attrs['units']}")
 
         # get the time array from the dataset
-        #logging.info('Reading Time values')
+        # logging.info('Reading Time values')
         datetime_array = ds['time'].to_numpy()
 
-        #logging.info('Reading Runoff values')
+        # logging.info('Reading Runoff values')
         if ds.ndim == 3:
             inflow_df = ds.values[:, lat_indices, lon_indices]
         elif ds.ndim == 4:
@@ -217,7 +218,7 @@ def create_inflow_file(lsm_data: str,
         inflow_df = _cumulative_to_incremental(inflow_df)
 
     # Create output inflow netcdf data
-    #logging.info("Writing inflows to file")
+    # logging.info("Writing inflows to file")
     os.makedirs(inflow_dir, exist_ok=True)
     datetime_array = inflow_df.index.to_numpy()
     start_date = datetime.datetime.fromtimestamp(datetime_array[0].astype(float) / 1e9, datetime.UTC).strftime('%Y%m%d')

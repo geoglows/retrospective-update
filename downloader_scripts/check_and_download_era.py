@@ -15,6 +15,7 @@ from datetime import datetime
 
 from cloud_logger import CloudLog
 
+
 class DownloadWorker(Thread):
     """
     A worker thread that downloads data using the provided parameters.
@@ -62,7 +63,7 @@ def download_era5(working_dir: str,
     Returns:
     - None
     """
-    era_dir = os.path.join(mnt_dir,'era5_data')
+    era_dir = os.path.join(mnt_dir, 'era5_data')
     os.makedirs(era_dir, exist_ok=True)
     try:
         c = cdsapi.Client()
@@ -75,7 +76,6 @@ def download_era5(working_dir: str,
         os.environ['CDSAPI_RC'] = cdsapirc_file
         c = cdsapi.Client()
 
-    
     try:
         last_date = xr.open_zarr(retro_zarr)['time'][-1].values
     except IndexError:
@@ -83,7 +83,7 @@ def download_era5(working_dir: str,
     cl.add_last_date(last_date)
 
     # run_again = False
-    if pd.to_datetime(last_date + np.timedelta64(14,'D')) > datetime.now():
+    if pd.to_datetime(last_date + np.timedelta64(14, 'D')) > datetime.now():
         # If the last date in the zarr file is within 2 weeks of today, then prohibit the script from continuing
         # since the ECMWF has a lag time of 6 days ish (a week for rounding)
         cl.log_message(f'{last_date} is within two weeks of today. Not running')
@@ -93,7 +93,7 @@ def download_era5(working_dir: str,
     today = pd.to_datetime(datetime.now().date())
     date_range = pd.date_range(start=last_date + pd.DateOffset(days=1), end=today - pd.DateOffset(days=14), freq='D')
     number_of_days = len(date_range)
-    times_to_download = [date_range[i:i+7].tolist() for i in range(0, number_of_days, 7)]
+    times_to_download = [date_range[i:i + 7].tolist() for i in range(0, number_of_days, 7)]
     # Remove the last list if it is less than 7 days
     if len(times_to_download[-1]) < 7:
         times_to_download.pop(-1)
@@ -101,8 +101,8 @@ def download_era5(working_dir: str,
     cl.add_time_period(date_range.tolist())
     cl.log_message('RUNNING', "Beginning download")
     # This machine holds ~100 GB, which means we can download at most 250 weeks of ERA5 data (added to ensure we don't run out of space, but will probably never be used)
-    max_weeks = 200 # 50 weeks buffer gives 20 GB extra space
-    times_to_download_split = [times_to_download[i:i+max_weeks] for i in range(0, len(times_to_download), max_weeks)]
+    max_weeks = 200  # 50 weeks buffer gives 20 GB extra space
+    times_to_download_split = [times_to_download[i:i + max_weeks] for i in range(0, len(times_to_download), max_weeks)]
     for times_to_download in times_to_download_split:
         requests = []
         num_requests = 0
@@ -115,7 +115,8 @@ def download_era5(working_dir: str,
             for year in years:
                 for month in months:
                     days = sorted({t.day for t in time_list if t.year == year and t.month == month})
-                    if month in {t.month for t in time_list if t.year == year} and not is_downloaded(ncs, year, month, days):
+                    if month in {t.month for t in time_list if t.year == year} and not is_downloaded(ncs, year, month,
+                                                                                                     days):
                         requests.append((era_dir, c, year, month, days))
                         num_requests += 1
 
@@ -147,25 +148,26 @@ def download_era5(working_dir: str,
                 netcdf_pairs.append([nc, ncs[ncs.index(nc) + 1]])
                 skip = True
 
-
         for ncs_to_use in netcdf_pairs:
             with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-                ds = (xr.open_mfdataset(ncs_to_use, 
-                                    concat_dim='time', 
-                                    combine='nested', 
-                                    parallel=True, 
-                                    chunks = {'time':'auto', 'lat':'auto','lon':'auto'}, # Chunk to prevent weird Slicing behavior and missing data
-                                    preprocess=process_expver_variable)
-                                    .sortby('time')
-                                    .groupby('time.date')
-                                    .sum(dim='time') # Convert to daily
-                                    .rename({'date':'time'})
-                )
+                ds = (xr.open_mfdataset(ncs_to_use,
+                                        concat_dim='time',
+                                        combine='nested',
+                                        parallel=True,
+                                        chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
+                                        # Chunk to prevent weird Slicing behavior and missing data
+                                        preprocess=process_expver_variable)
+                      .sortby('time')
+                      .groupby('time.date')
+                      .sum(dim='time')  # Convert to daily
+                      .rename({'date': 'time'})
+                      )
                 ds['time'] = ds['time'].values.astype('datetime64[ns]')
-                
+
             # Make sure all days were downloaded
-            if ds['time'].shape[0] != 7: 
-                raise ValueError(f'The entire time series was not downloaded correctly ({ds["time"].shape[0]} of {7} for {ncs_to_use}) likely ECMWF has not updated their datasets')
+            if ds['time'].shape[0] != 7:
+                raise ValueError(
+                    f'The entire time series was not downloaded correctly ({ds["time"].shape[0]} of {7} for {ncs_to_use}) likely ECMWF has not updated their datasets')
 
             ds.to_netcdf('temp.nc')
             if isinstance(ncs_to_use, list):
@@ -192,11 +194,12 @@ def download_era5(working_dir: str,
             for nc in ncs_to_use:
                 os.remove(nc)
 
+
 def retrieve_data(era_dir: str,
-                  client: cdsapi.Client, 
-                  year: int, 
-                  month: int, 
-                  days: list[int],) -> None:
+                  client: cdsapi.Client,
+                  year: int,
+                  month: int,
+                  days: list[int], ) -> None:
     """
     Retrieves era5 data.
 
@@ -222,9 +225,10 @@ def retrieve_data(era_dir: str,
             'month': str(month).zfill(2),
             'day': [str(day).zfill(2) for day in days],
             'time': [f'{x:02d}:00' for x in range(0, 24)],
-        }, 
+        },
         target=os.path.join(era_dir, f'era5_{year}_{month}_{days[0]}-{days[-1]}.nc')
     )
+
 
 def date_sort(s: str) -> datetime:
     """
@@ -238,6 +242,7 @@ def date_sort(s: str) -> datetime:
     """
     x = os.path.basename(s).split('.')[0].split('_')[1:]
     return datetime(int(x[0]), int(x[1]), int(x[2].split('-')[1]))
+
 
 def process_expver_variable(ds: xr.Dataset,
                             runoff: str = 'ro') -> xr.DataArray:
@@ -258,9 +263,10 @@ def process_expver_variable(ds: xr.Dataset,
         raise ValueError('"expver" found in downloaded ERA files')
     return ds[runoff]
 
-def is_downloaded(ncs: list[str], 
-                  year: str, 
-                  month: str, 
+
+def is_downloaded(ncs: list[str],
+                  year: str,
+                  month: str,
                   days: list[int]) -> bool:
     # Check any already downloaded era 5 files to see if we need to download this time period
     for nc in ncs:
@@ -284,11 +290,11 @@ if __name__ == "__main__":
         s3_bucket = os.getenv('S3_BUCKET')
         s3_zarr_name = os.getenv('S3_ZARR_NAME')
         region_name = os.getenv('REGION_NAME')
-        
+
         bucket_uri = os.path.join(s3_bucket, s3_zarr_name)
         s3 = s3fs.S3FileSystem(anon=False, client_kwargs=dict(region_name=region_name))
         retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3, check=False)
-        download_era5(working_directory, retro_zarr, s3_bucket, mnt_dir,cl)
+        download_era5(working_directory, retro_zarr, s3_bucket, mnt_dir, cl)
 
         ec2 = boto3.client('ec2', region_name=region_name)
         ec2.start_instances(InstanceIds=[other_instance])

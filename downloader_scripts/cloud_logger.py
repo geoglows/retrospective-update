@@ -9,9 +9,10 @@ import numpy as np
 
 LOG_GROUP_NAME = os.getenv('AWS_LOG_GROUP_NAME')
 LOG_STREAM_NAME = os.getenv('AWS_LOG_STREAM_NAME')
-ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID') 
-SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY') 
+ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
+SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 REGION = os.getenv('AWS_REGION')
+
 
 class CloudLog():
     """
@@ -36,10 +37,10 @@ class CloudLog():
 
     """
 
-    def __init__(self, 
-                 ACCESS_KEY_ID = ACCESS_KEY_ID,
-                 SECRET_ACCESS_KEY= SECRET_ACCESS_KEY,
-                 REGION= REGION,
+    def __init__(self,
+                 ACCESS_KEY_ID=ACCESS_KEY_ID,
+                 SECRET_ACCESS_KEY=SECRET_ACCESS_KEY,
+                 REGION=REGION,
                  save_path: str = 'log.json',
                  ):
         self.save_path = save_path
@@ -75,16 +76,16 @@ class CloudLog():
             self.last_date = str(date)
 
     def add_qinit(self, qinit: datetime.datetime) -> None:
-            """
-            Adds the initial query date to the logger.
+        """
+        Adds the initial query date to the logger.
 
-            Args:
-                qinit (datetime.datetime): The initial query date.
+        Args:
+            qinit (datetime.datetime): The initial query date.
 
-            Returns:
-                None
-            """
-            self.qinit = qinit.strftime('%m/%d/%Y')
+        Returns:
+            None
+        """
+        self.qinit = qinit.strftime('%m/%d/%Y')
 
     def add_time_period(self, time_range: list[datetime.datetime]) -> None:
         """
@@ -123,7 +124,6 @@ class CloudLog():
         self.qinit = None
         self.time_period = None
         self.message = ''
-
 
     def log_message(self, status: str, message: str = None) -> dict:
         """
