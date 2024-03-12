@@ -93,7 +93,8 @@ def download_era5(working_dir: str,
 
     last_date = pd.to_datetime(last_date)
     today = pd.to_datetime(datetime.now().date())
-    date_range = pd.date_range(start=last_date + pd.DateOffset(days=1), end=today - pd.DateOffset(days=MIN_LAG_TIME_DAYS), freq='D')
+    date_range = pd.date_range(start=last_date + pd.DateOffset(days=1),
+                               end=today - pd.DateOffset(days=MIN_LAG_TIME_DAYS), freq='D')
     number_of_days = len(date_range)
     times_to_download = [date_range[i:i + 7].tolist() for i in range(0, number_of_days, 7)]
     # Remove the last list if it is less than 7 days
@@ -151,18 +152,20 @@ def download_era5(working_dir: str,
 
         for ncs_to_use in netcdf_pairs:
             with dask.config.set(**{'array.slicing.split_large_chunks': False}):
-                ds = (xr.open_mfdataset(ncs_to_use,
-                                        concat_dim='time',
-                                        combine='nested',
-                                        parallel=True,
-                                        chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
-                                        # Chunk to prevent weird Slicing behavior and missing data
-                                        preprocess=process_expver_variable)
-                      .sortby('time')
-                      .groupby('time.date')
-                      .sum(dim='time')  # Convert to daily
-                      .rename({'date': 'time'})
-                      )
+                ds = (
+                    xr
+                    .open_mfdataset(ncs_to_use,
+                                    concat_dim='time',
+                                    combine='nested',
+                                    parallel=True,
+                                    chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
+                                    # Chunk to prevent weird Slicing behavior and missing data
+                                    preprocess=process_expver_variable)
+                    .sortby('time')
+                    .groupby('time.date')
+                    .sum(dim='time')  # Convert to daily
+                    .rename({'date': 'time'})
+                )
                 ds['time'] = ds['time'].values.astype('datetime64[ns]')
 
             # Make sure all days were downloaded
