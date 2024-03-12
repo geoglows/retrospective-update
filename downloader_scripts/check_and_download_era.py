@@ -15,6 +15,8 @@ from datetime import datetime
 
 from cloud_logger import CloudLog
 
+MIN_LAG_TIME_DAYS = 7
+
 
 class DownloadWorker(Thread):
     """
@@ -83,7 +85,7 @@ def download_era5(working_dir: str,
     cl.add_last_date(last_date)
 
     # run_again = False
-    if pd.to_datetime(last_date + np.timedelta64(7, 'D')) > datetime.now():
+    if pd.to_datetime(last_date + np.timedelta64(MIN_LAG_TIME_DAYS, 'D')) > datetime.now():
         # If the last date in the zarr file is within 2 weeks of today, then prohibit the script from continuing
         # since the ECMWF has a lag time of 6 days ish (a week for rounding)
         cl.log_message(f'{last_date} is within two weeks of today. Not running')
@@ -91,7 +93,7 @@ def download_era5(working_dir: str,
 
     last_date = pd.to_datetime(last_date)
     today = pd.to_datetime(datetime.now().date())
-    date_range = pd.date_range(start=last_date + pd.DateOffset(days=1), end=today - pd.DateOffset(days=14), freq='D')
+    date_range = pd.date_range(start=last_date + pd.DateOffset(days=1), end=today - pd.DateOffset(days=MIN_LAG_TIME_DAYS), freq='D')
     number_of_days = len(date_range)
     times_to_download = [date_range[i:i + 7].tolist() for i in range(0, number_of_days, 7)]
     # Remove the last list if it is less than 7 days
@@ -100,7 +102,6 @@ def download_era5(working_dir: str,
 
     cl.add_time_period(date_range.tolist())
     cl.log_message('RUNNING', "Beginning download")
-    # This machine holds ~100 GB, which means we can download at most 250 weeks of ERA5 data (added to ensure we don't run out of space, but will probably never be used)
     max_weeks = 200  # 50 weeks buffer gives 20 GB extra space
     times_to_download_split = [times_to_download[i:i + max_weeks] for i in range(0, len(times_to_download), max_weeks)]
     for times_to_download in times_to_download_split:
