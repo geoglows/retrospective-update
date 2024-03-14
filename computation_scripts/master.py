@@ -24,7 +24,7 @@ GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
 GEOGLOWS_ODP_REGION = 'us-west-2'
 
-GEOGLOWS_ODP_CONFIGS = 's3://geoglows-v2/configs'
+GEOGLOWS_ODP_CONFIGS = os.getenv('CONFIGS_DIR')
 
 CL = CloudLog()
 s3 = s3fs.S3FileSystem()
@@ -379,7 +379,7 @@ def main(retro_zarr: str, nc: str, ) -> None:
                            preprocess=drop_coords, ).reindex(rivid=xr.open_zarr(retro_zarr)['rivid']) as ds:
 
         CL.log_message('RUNNING',
-                       f'Appending to zarr: {np.datetime_as_string(ds.time[0].values, unit='h')} to {np.datetime_as_string(ds.time[-1].values, unit='h')}')
+                       f'Appending to zarr: {np.datetime_as_string(ds.time[0].values, unit="h")} to {np.datetime_as_string(ds.time[-1].values, unit="h")}')
         append_week(ds, retro_zarr)
 
 

@@ -1,4 +1,4 @@
-export VOLUME_DIR="/mnt/retro_volume"  # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
+export VOLUME_DIR="/mnt"  # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
 export S3_ZARR="s3://geoglows-scratch/retrospective.zarr" # Zarr located on S3
 export QFINAL_DIR="s3://geoglows-scratch/retro" # Directory containing vpu subdirectories, containing Qfinal files
 export CONFIGS_DIR="s3://geoglows-v2/configs" # Directory containing subdirectories, containing the files to run RAPID. Only needed if running this for the first time
