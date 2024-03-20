@@ -24,7 +24,7 @@ GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
 GEOGLOWS_ODP_REGION = 'us-west-2'
 
-GEOGLOWS_ODP_CONFIGS = os.getenv('CONFIGS_DIR')
+GEOGLOWS_ODP_CONFIGS = os.getenv('S3_CONFIGS_DIR')
 
 CL = CloudLog()
 s3 = s3fs.S3FileSystem()
@@ -37,7 +37,7 @@ volume_directory = os.getenv('VOLUME_DIR')
 # Zarr located on S3
 s3_zarr = os.getenv('S3_ZARR')
 # Directory containing subdirectories, containing Qfinal files
-qfinal_dir = os.getenv('QFINAL_DIR')
+qfinal_dir = os.getenv('S3_QFINAL_DIR')
 # Directory containing the ERA5 data
 ERA_DIR = os.getenv('ERA_DIR')
 # Local zarr to append to
