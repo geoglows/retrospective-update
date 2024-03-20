@@ -25,7 +25,7 @@ GEOGLOWS_ODP_REGION = 'us-west-2'
 MNT_DIR = os.getenv('VOLUME_DIR')
 
 region_name = os.getenv('REGION_NAME')
-s3_bucket = os.getenv('S3_BUCKET')
+s3_era_dir = os.getenv('S3_ERA_DIR')
 compute_instance = os.getenv('COMPUTE_INSTANCE')
 ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
@@ -35,7 +35,7 @@ CL = CloudLog()
 
 # print all the stuff from the environment variables
 print(f'region_name: {region_name}')
-print(f's3_bucket: {s3_bucket}')
+print(f's3_era_dir: {s3_era_dir}')
 print(f'compute_instance: {compute_instance}')
 print(f'ACCESS_KEY_ID: {ACCESS_KEY_ID}')
 print(f'SECRET_ACCESS_KEY: {SECRET_ACCESS_KEY}')
@@ -210,8 +210,8 @@ def download_era5() -> None:
             else:
                 outname = os.path.basename(ncs_to_use)
             print(f'outname: {outname}')
-            print(s3_bucket + '/era_5/' + outname)
-            s3_era5.upload_file('temp.nc', s3_bucket, f'{outname}')
+            print(f'{s3_era_dir}/{outname}')
+            s3_era5.upload_file('temp.nc', s3_era_dir, f'{outname}')
             print('uploaded')
 
             # Remove uncombined netcdfs
