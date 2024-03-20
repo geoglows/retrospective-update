@@ -9,3 +9,4 @@ export AWS_LOG_STREAM_NAME="retrospective-updater-log-stream" # AWS CloudWatch l
 export REGION_NAME="us-east-1" # AWS region name
 export COMPUTE_INSTANCE="i-09176b22574ab46b9" # ID of the other EC2 instance
 export CDSAPI_RC="/home/ubuntu/.cdsapirc" # Path to the CDS API key file
+export ODP_CREDENTIALS_FILE="/home/ubuntu/odp_aws_credentials" # Path to the ODP credentials file

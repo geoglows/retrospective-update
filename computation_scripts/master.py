@@ -23,8 +23,8 @@ logging.basicConfig(level=logging.INFO,
 GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
 GEOGLOWS_ODP_REGION = 'us-west-2'
-
 GEOGLOWS_ODP_CONFIGS = os.getenv('S3_CONFIGS_DIR')
+ODP_CREDENTIALS_FILE = os.getenv('ODP_CREDENTIALS_FILE')
 
 CL = CloudLog()
 s3 = s3fs.S3FileSystem()
@@ -237,25 +237,29 @@ def sync_local_to_s3(local_zarr: str, s3_zarr: str) -> None:
     """
     # all . files in the top folder (.zgroup, .zmetadata), and all . files in the Qout var n(.zarray)
     files_to_upload = glob.glob(os.path.join(local_zarr, '.*')) + glob.glob(os.path.join(local_zarr, 'Qout', '.*'))
-    command = ""
+    commands = []
     for f in files_to_upload:
         if 'Qout' in f:
             destination = os.path.join(s3_zarr, 'Qout')
         else:
             # Otherwise, upload to the top-level folder
             destination = s3_zarr
-        command += f"s5cmd cp {f} {destination}/\n"
-    command += f"s5cmd sync --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/\n"
-    command += f"s5cmd sync --size-only {local_zarr}/time/ {s3_zarr}/time/"
+        commands.append(f"s5cmd --credentials-file {ODP_CREDENTIALS_FILE} cp {f} {destination}/")
+    commands.append(f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/")
+    commands.append(f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only {local_zarr}/time/ {s3_zarr}/time/")
 
-    result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    results = []
+    for command in commands:
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        results.append(result)
+        # Check if the command was successful
+        if result.returncode == 0:
+            logging.info("Sync completed successfully.")
+        else:
+            logging.error(f"Sync failed. Error: {result.stderr}")
 
-    # Check if the command was successful
-    if result.returncode == 0:
-        logging.info("Sync completed successfully.")
-    else:
-        logging.error(f"Sync failed. Error: {result.stderr}")
-        raise Exception(result.stderr)
+    if any(result.returncode != 0 for result in results):
+        raise Exception("Sync failed. Consult the logs.")
 
 
 def setup_configs() -> None:
