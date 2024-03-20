@@ -11,7 +11,7 @@ LOG_GROUP_NAME = os.getenv('AWS_LOG_GROUP_NAME')
 LOG_STREAM_NAME = os.getenv('AWS_LOG_STREAM_NAME')
 ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-REGION = os.getenv('AWS_REGION')
+REGION = os.getenv('REGION_NAME')
 
 
 class CloudLog():

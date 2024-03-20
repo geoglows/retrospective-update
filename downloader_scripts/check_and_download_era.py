@@ -29,7 +29,7 @@ s3_era_dir = os.getenv('S3_ERA_DIR')
 compute_instance = os.getenv('COMPUTE_INSTANCE')
 ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-REGION = os.getenv('AWS_REGION')
+REGION = os.getenv('REGION_NAME')
 
 CL = CloudLog()
 
