@@ -8,6 +8,7 @@ import numpy as np
 import netCDF4 as nc
 import s3fs
 import pandas as pd
+
 """
 We create a qfinal file for the last date in the retrospective zarr file. This file is used to initialize the historical model.
 """
@@ -22,6 +23,7 @@ comids: dict[str: str] = {}
 for vpu in vpu_folders:
     comids[vpu.split('/')[-1]] = [f for f in s3.ls(vpu) if '/comid' in f][0]
 
+
 def main() -> None:
     """
     This is the main function that creates the qfinal files for each VPU.
@@ -33,6 +35,7 @@ def main() -> None:
     with multiprocessing.Pool(processes=processes) as pool:
         pool.map(helper, split_into_sublists([vpu for vpu, _ in comids.items()], processes))
     print('Finished')
+
 
 def helper(vpus: list[str]) -> None:
     """
@@ -46,7 +49,7 @@ def helper(vpus: list[str]) -> None:
     """
     ds = xr.open_zarr(retro_zarr)
     last_retro_time = xr.open_zarr(retro_zarr).time[-1].values
-    last_time: str = np.datetime_as_string(last_retro_time, unit='D').replace('-','')
+    last_time: str = np.datetime_as_string(last_retro_time, unit='D').replace('-', '')
     s3 = s3fs.S3FileSystem(anon=True)
     for vpu in vpus:
         with s3.open(comids[vpu], 'r') as f:
@@ -113,6 +116,7 @@ def helper(vpus: list[str]) -> None:
 
         ds.close()
 
+
 def split_into_sublists(lst: list, n: int) -> list[list]:
     """
     Splits a list into sublists of approximately equal size.
@@ -129,11 +133,12 @@ def split_into_sublists(lst: list, n: int) -> list[list]:
 
     # Use list comprehension to create sublists
     sublists = [lst[i * sublist_size:(i + 1) * sublist_size] for i in range(n - 1)]
-    
+
     # Add the remaining elements to the last sublist
     sublists.append(lst[(n - 1) * sublist_size:])
-    
+
     return sublists
+
 
 if __name__ == '__main__':
     multiprocessing.set_start_method('forkserver')

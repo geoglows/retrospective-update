@@ -22,7 +22,7 @@ HOME=/home/ubuntu
 cd $HOME/retrospective-update/downloader_scripts
 eval $($HOME/miniconda3/bin/conda shell.bash hook)
 source $HOME/miniconda3/bin/activate download
-source .profile
+source ../.profile
 python check_and_download_era.py
 sudo shutdown -h now
 

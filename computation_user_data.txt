@@ -22,7 +22,7 @@ HOME=/home/ubuntu
 cd $HOME/retrospective-update/computation_scripts
 eval $($HOME/miniconda3/bin/conda shell.bash hook)
 source $HOME/miniconda3/bin/activate add_week
-source .profile
+source ../.profile
 python master.py
 sudo shutdown -h now
 

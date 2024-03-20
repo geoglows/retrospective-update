@@ -7,6 +7,7 @@ import natsort
 import logging
 import sys
 
+
 def rapid_namelist(
         namelist_save_path: str,
 
@@ -135,6 +136,7 @@ def rapid_namelist(
 
     with open(namelist_save_path, 'w') as f:
         f.write(namelist_string)
+
 
 def rapid_namelist_from_directories(vpu_directory: str,
                                     inflows_directory: str,
