@@ -39,7 +39,7 @@ s3_zarr = os.getenv('S3_ZARR')
 # Directory containing subdirectories, containing Qfinal files
 qfinal_dir = os.getenv('S3_QFINAL_DIR')
 # Directory containing the ERA5 data
-ERA_DIR = os.getenv('ERA_DIR')
+ERA_DIR = os.getenv('S3_ERA_DIR')
 # Local zarr to append to
 local_zarr = os.path.join(volume_directory, os.getenv('LOCAL_ZARR_NAME'))  # Local zarr to append to
 

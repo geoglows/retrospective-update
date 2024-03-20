@@ -22,12 +22,11 @@ GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
 GEOGLOWS_ODP_REGION = 'us-west-2'
 
-MNT_DIR = os.getenv('MNT_DIR')
+MNT_DIR = os.getenv('VOLUME_DIR')
 
 region_name = os.getenv('REGION_NAME')
 s3_bucket = os.getenv('S3_BUCKET')
-s3_zarr_name = os.getenv('S3_ZARR_NAME')
-compute_instance = os.getenv('OTHER_INSTANCE')
+compute_instance = os.getenv('COMPUTE_INSTANCE')
 ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 REGION = os.getenv('AWS_REGION')
@@ -37,7 +36,6 @@ CL = CloudLog()
 # print all the stuff from the environment variables
 print(f'region_name: {region_name}')
 print(f's3_bucket: {s3_bucket}')
-print(f's3_zarr_name: {s3_zarr_name}')
 print(f'compute_instance: {compute_instance}')
 print(f'ACCESS_KEY_ID: {ACCESS_KEY_ID}')
 print(f'SECRET_ACCESS_KEY: {SECRET_ACCESS_KEY}')
