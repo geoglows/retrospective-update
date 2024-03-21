@@ -109,8 +109,8 @@ def inflow_and_namelist() -> None:
     vpu_numbers = [os.path.basename(d) for d in glob.glob(os.path.join(configs_dir, '*'))]
     logging.info(vpu_numbers)
     with Pool(processes) as p:
-        p.starmap(_make_inflow_for_vpu, vpu_numbers)
-        p.starmap(_make_namelists_for_vpu, vpu_numbers)
+        p.map(_make_inflow_for_vpu, vpu_numbers)
+        p.map(_make_namelists_for_vpu, vpu_numbers)
 
     # number of expected files = num_configs_dirs * num_runoff_files
     expected_file_count = len(glob.glob(os.path.join(configs_dir, '*'))) * len(
