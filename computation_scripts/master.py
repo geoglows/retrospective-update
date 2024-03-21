@@ -374,7 +374,7 @@ def concatenate_outputs() -> None:
             .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
             .to_zarr(local_zarr, mode='a', append_dim=time, consolidated=True)
         )
-        logging.info(f'Finished appending in {round((time.time() - begin) / 60, 1)} minutes')
+        logging.info(f'Finished appending')
     return
 
 
@@ -390,7 +390,8 @@ def fetch_staged_era5():
     # fetch the files
     logging.info(f'Fetching ERA5 runoff files from {s3_era_bucket}')
     logging.info(f'aws s3 sync {s3_era_bucket} {runoff_dir} --include "*"')
-    subprocess.call(f'aws s3 sync {s3_era_bucket} {runoff_dir} --include "*"')
+    subprocess.call(['aws', 's3', 'sync', s3_era_bucket, runoff_dir, '--include', '"*"'], shell=True)
+    return
 
 
 def run_rapid():
