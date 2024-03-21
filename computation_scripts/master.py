@@ -357,7 +357,7 @@ def concatenate_outputs() -> None:
     if not qouts:
         raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
 
-    unique_start_dates = {os.path.basename(f).split('_')[2] for f in qouts}
+    unique_start_dates = sorted({os.path.basename(f).split('_')[2] for f in qouts})
 
     for unique_start_date in unique_start_dates:
         with xr.open_zarr(local_zarr) as retro_ds:
