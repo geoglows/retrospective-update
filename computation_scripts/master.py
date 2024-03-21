@@ -88,7 +88,7 @@ def _make_namelists_for_vpu(vpu: str) -> None:
             qinit_file=qfinal_file
         )
 
-    for namelist in glob.glob(os.path.join(namelist_dir, vpu, f'namelist*')):
+    for namelist in glob.glob(os.path.join(namelist_dir, f'namelist*')):
         # Correct the paths in the namelist file
         with open(namelist, 'r') as f:
             text = f.read().replace(HOME, '/mnt')
