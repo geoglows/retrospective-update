@@ -107,6 +107,7 @@ def inflow_and_namelist() -> None:
     )
     logging.info(f"Using {processes} processes for inflows")
     vpu_numbers = [os.path.basename(d) for d in glob.glob(os.path.join(configs_dir, '*'))]
+    logging.info(vpu_numbers)
     with Pool(processes) as p:
         p.starmap(_make_inflow_for_vpu, vpu_numbers)
         p.starmap(_make_namelists_for_vpu, vpu_numbers)
