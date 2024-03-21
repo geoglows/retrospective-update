@@ -3,7 +3,6 @@ import glob
 import logging
 import os
 import subprocess
-import time
 import traceback
 from multiprocessing import Pool
 
@@ -361,24 +360,22 @@ def concatenate_outputs() -> None:
 
     with xr.open_zarr(local_zarr) as retro_ds:
         chunks = retro_ds.chunks
-
-    with xr.open_mfdataset(
-            qouts,
-            combine='nested',
-            concat_dim='rivid',
-            preprocess=drop_coords
-    ) as new_ds:
-        earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
-        latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
-        CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
-
-        logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
-        (
-            new_ds
-            .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
-            .to_zarr(local_zarr, mode='a', append_dim=time, consolidated=True)
-        )
-        logging.info(f'Finished appending')
+        with xr.open_mfdataset(
+                qouts,
+                combine='nested',
+                concat_dim='rivid',
+                preprocess=drop_coords
+        ).reindex(rivid=retro_ds['rivid']) as new_ds:
+            earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
+            latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
+            CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
+            logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
+            (
+                new_ds
+                .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
+                .to_zarr(local_zarr, mode='a', append_dim='time', consolidated=True)
+            )
+            logging.info(f'Finished appending')
     return
 
 
