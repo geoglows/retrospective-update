@@ -82,7 +82,7 @@ def _make_namelists_for_vpu(vpu: str) -> None:
     for inflow_file in natsort.natsorted(glob.glob(os.path.join(inflow_dir, 'm3*.nc'))):
         qfinal_file = rapid_namelist_from_directories(
             vpu_dir,
-            inflow_dir,
+            inflow_file,
             namelist_dir,
             output_dir,
             qinit_file=qfinal_file
