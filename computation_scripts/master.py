@@ -388,7 +388,9 @@ def fetch_staged_era5():
         raise FileNotFoundError(f"No .nc files found in {s3_era_bucket}")
 
     # fetch the files
-    subprocess.call(f'aws s3 sync {s3_era_bucket} {runoff_dir} --recursive --include "*"')
+    logging.info(f'Fetching ERA5 runoff files from {s3_era_bucket}')
+    logging.info(f'aws s3 sync {s3_era_bucket} {runoff_dir} --include "*"')
+    subprocess.call(f'aws s3 sync {s3_era_bucket} {runoff_dir} --include "*"')
 
 
 def run_rapid():
