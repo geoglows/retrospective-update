@@ -273,33 +273,57 @@ def sync_local_to_s3() -> None:
     Raises:
         Exception: If the sync command fails.
     """
+    qout_files = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')))
+    if not qout_files:
+        raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
+
+    for qout_file in qout_files:
+        vpu = os.path.basename(os.path.dirname(qout_file))
+        result = subprocess.run(
+            f's5cmd --credentials-file {ODP_CREDENTIALS_FILE} cp {qout_file} {GEOGLOWS_ODP_RETROSPECTIVE_BUCKET}/retrospective/{vpu}/{qout_file}',
+            shell=True, capture_output=True, text=True,
+        )
+        if not result.returncode == 0:
+            raise Exception(f"Sync failed. Error: {result.stderr}")
+
+    qfinal_files = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qfinal*.nc')))
+    if not qfinal_files:
+        raise FileNotFoundError("No Qfinal files found. RAPID probably not run correctly.")
+
+    for qfinal_file in qfinal_files:
+        vpu = os.path.basename(os.path.dirname(qfinal_file))
+        result = subprocess.run(
+            f's5cmd --credentials-file {ODP_CREDENTIALS_FILE} cp {qfinal_file} {s3_qfinal_dir}/{vpu}/{qfinal_file}',
+            shell=True, capture_output=True, text=True,
+        )
+        if not result.returncode == 0:
+            raise Exception(f"Sync failed. Error: {result.stderr}")
+
     # all . files in the top folder (.zgroup, .zmetadata), and all . files in the Qout var n(.zarray)
-    files_to_upload = glob.glob(os.path.join(local_zarr, '.*')) + glob.glob(os.path.join(local_zarr, 'Qout', '.*'))
-    commands = []
-    for f in files_to_upload:
-        if 'Qout' in f:
-            destination = os.path.join(s3_zarr, 'Qout')
-        else:
-            # Otherwise, upload to the top-level folder
-            destination = s3_zarr
-        commands.append(f"s5cmd --credentials-file {ODP_CREDENTIALS_FILE} cp {f} {destination}/")
-    commands.append(
-        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/")
-    commands.append(
-        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only {local_zarr}/time/ {s3_zarr}/time/")
+    for f in glob.glob(os.path.join(local_zarr, '.*')):
+        destination = s3_zarr
+        result = subprocess.run(
+            f"s5cmd --credentials-file {ODP_CREDENTIALS_FILE} cp {f} {destination}/",
+            shell=True, capture_output=True, text=True,
+        )
+        if not result.returncode == 0:
+            raise Exception(f"Sync failed. Error: {result.stderr}")
 
-    results = []
-    for command in commands:
-        result = subprocess.run(command, shell=True, capture_output=True, text=True)
-        results.append(result)
-        # Check if the command was successful
-        if result.returncode == 0:
-            logging.info("Sync completed successfully.")
-        else:
-            logging.error(f"Sync failed. Error: {result.stderr}")
+    # sync the zarr time variable
+    result = subprocess.run(
+        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only {local_zarr}/time/ {s3_zarr}/time/",
+        shell=True, capture_output=True, text=True,
+    )
+    if not result.returncode == 0:
+        raise Exception(f"Sync failed. Error: {result.stderr}")
 
-    if any(result.returncode != 0 for result in results):
-        raise Exception("Sync failed. Consult the logs.")
+    # sync the zarr Qout variable's 1.* files
+    result = subprocess.run(
+        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/",
+        shell=True, capture_output=True, text=True,
+    )
+    if not result.returncode == 0:
+        raise Exception(f"Sync failed. Error: {result.stderr}")
     return
 
 
