@@ -354,28 +354,30 @@ def _check_installations() -> None:
 def concatenate_outputs() -> None:
     # Build the week dataset
     qouts = natsort.natsorted(glob.glob(os.path.join(HOME, 'data', 'outputs', '*', 'Qout*.nc')))
-
     if not qouts:
         raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
 
-    with xr.open_zarr(local_zarr) as retro_ds:
-        chunks = retro_ds.chunks
-        with xr.open_mfdataset(
-                qouts,
-                combine='nested',
-                concat_dim='rivid',
-                preprocess=drop_coords
-        ).reindex(rivid=retro_ds['rivid']) as new_ds:
-            earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
-            latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
-            CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
-            logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
-            (
-                new_ds
-                .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
-                .to_zarr(local_zarr, mode='a', append_dim='time', consolidated=True)
-            )
-            logging.info(f'Finished appending')
+    unique_start_dates = {os.path.basename(f).split('_')[2] for f in qouts}
+
+    for unique_start_date in unique_start_dates:
+        with xr.open_zarr(local_zarr) as retro_ds:
+            chunks = retro_ds.chunks
+            with xr.open_mfdataset(
+                    [qout for qout in qouts if unique_start_date in qout],
+                    combine='nested',
+                    concat_dim='rivid',
+                    preprocess=drop_coords
+            ).reindex(rivid=retro_ds['rivid']) as new_ds:
+                earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
+                latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
+                CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
+                logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
+                (
+                    new_ds
+                    .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
+                    .to_zarr(local_zarr, mode='a', append_dim='time', consolidated=True)
+                )
+                logging.info(f'Finished appending')
     return
 
 
