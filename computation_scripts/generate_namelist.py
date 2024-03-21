@@ -144,7 +144,7 @@ def rapid_namelist_from_directories(vpu_directory: str,
                                     outputs_directory: str,
                                     datesubdir: bool = False,
                                     qinit_file: str = None,
-                                    search_for_qinit_file: bool = True, ) -> None:
+                                    search_for_qinit_file: bool = True, ) -> str:
     vpu_code = os.path.basename(vpu_directory)
     k_file = os.path.join(vpu_directory, f'k.csv')
     x_file = os.path.join(vpu_directory, f'x.csv')
@@ -167,9 +167,7 @@ def rapid_namelist_from_directories(vpu_directory: str,
         end_date = inflow_file_name_params[3]
         file_label = inflow_file_name_params[4] if len(inflow_file_name_params) > 4 else ''
 
-        namelist_file_name = f'namelist_{vpu_code}'
-        namelist_file_name = f'namelist_{vpu_code}_{start_date}_{end_date}'
-        namelist_file_name = f'namelist_{vpu_code}_{start_date}'
+        namelist_file_name = f'namelist_{start_date}'
         qout_file_name = f'Qout_{vpu_code}_{start_date}_{end_date}.nc'
         vlat_file = inflow_file
         write_qfinal_file = True
@@ -225,7 +223,7 @@ def rapid_namelist_from_directories(vpu_directory: str,
                        use_qinit_file=use_qinit_file,
                        qinit_file=qinit_file, )
 
-    return
+    return qfinal_file
 
 
 if __name__ == '__main__':

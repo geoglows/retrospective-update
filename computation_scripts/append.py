@@ -18,34 +18,6 @@ MAX_SECOND_CHUNKSIZE = float('inf')  # Infinity means always append, never rechu
 s3 = s3fs.S3FileSystem()
 
 
-def append_week(week_ds: xr.Dataset,
-                retro_zarr: str) -> None:
-    """
-    Append an xarray dataset to a zarr file. Option exists to rechunk, not utilized
-    
-    Parameters:
-        week_ds (xr.Dataset): The xarray dataset to be appended.
-        retro_zarr (str): The path to the zarr file to which the dataset will be appended.
-        
-    Returns:
-        None
-    """
-    begin = time.time()
-    with xr.open_zarr(retro_zarr) as retro_ds:
-        chunks = retro_ds.chunks
-
-        # Append if: there is only 1 time chunk or the second time chunk is smaller than a certain size
-        if len(chunks['time']) == 1 or chunks['time'][-1] < MAX_SECOND_CHUNKSIZE:
-            logging.info('Beginning append')
-            retro_ds = None
-            append(retro_zarr, week_ds, chunks)
-        else:
-            logging.info('Beginning concatenation and rechunking')
-            rechunk_to_one(retro_zarr, week_ds, chunks)
-
-    logging.info(f'Finished appending in {round((time.time() - begin) / 60, 1)} minutes')
-
-
 def rechunk_to_one(retro_ds: xr.Dataset,
                    week_ds: xr.Dataset,
                    chunks,

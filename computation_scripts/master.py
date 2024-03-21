@@ -1,24 +1,21 @@
 import datetime
 import glob
 import logging
-import multiprocessing
 import os
 import subprocess
+import time
 import traceback
+from multiprocessing import Pool
 
+import natsort
 import numpy as np
 import psutil
 import s3fs
 import xarray as xr
 
-from append import append_week
 from cloud_logger import CloudLog
 from generate_namelist import rapid_namelist_from_directories
 from inflow import create_inflow_file
-
-logging.basicConfig(level=logging.INFO,
-                    filename='log.log',
-                    format='%(asctime)s - %(levelname)s - %(message)s')
 
 GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
@@ -29,79 +26,113 @@ ODP_CREDENTIALS_FILE = os.getenv('ODP_CREDENTIALS_FILE')
 CL = CloudLog()
 s3 = s3fs.S3FileSystem()
 
-# HOME = os.getenv('HOME')
-HOME = os.getcwd()
-
 # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
 volume_directory = os.getenv('VOLUME_DIR')
-# Zarr located on S3
-s3_zarr = os.getenv('S3_ZARR')
-# Directory containing subdirectories, containing Qfinal files
-qfinal_dir = os.getenv('S3_QFINAL_DIR')
-# Directory containing the ERA5 data
-s3_era_bucket = os.getenv('S3_ERA_BUCKET')
-# Local zarr to append to
+s3_zarr = os.getenv('S3_ZARR')  # retrospective zarr on S3
+s3_qfinal_dir = os.getenv('S3_QFINAL_DIR')  # Directory containing vpu subdirectories, containing Qfinal files
+s3_era_bucket = os.getenv('S3_ERA_BUCKET')  # Directory containing the ERA5 data
 local_zarr = os.path.join(volume_directory, os.getenv('LOCAL_ZARR_NAME'))  # Local zarr to append to
 
+# set some file paths relative to HOME
+HOME = os.getcwd()
+configs_dir = os.path.join(HOME, 'data', 'configs')
+inflows_dir = os.path.join(HOME, 'data', 'inflows')
+runoff_dir = os.path.join(HOME, 'data', 'era5_runoff')
+outputs_dir = os.path.join(HOME, 'data', 'outputs')
+namelists_dir = os.path.join(HOME, 'data', 'namelists')
 
-def inflow_and_namelist(
-        namelist_dir: str,
-        nc: str,
-        vpu_dirs: list[str]) -> None:
-    """
-    Generate inflow files and namelist files for each VPU directory.
+# create the required directory structure
+os.makedirs(configs_dir, exist_ok=True)
+os.makedirs(runoff_dir, exist_ok=True)
+for d in glob.glob(os.path.join(configs_dir, '*')):
+    os.makedirs(os.path.join(inflows_dir, os.path.basename(d)), exist_ok=True)
+    os.makedirs(os.path.join(outputs_dir, os.path.basename(d)), exist_ok=True)
+    os.makedirs(os.path.join(namelists_dir, os.path.basename(d)), exist_ok=True)
 
-    Args:
-        namelist_dir (str): The directory to store the namelist files.
-        nc (str): The path to the nc file.
-        vpu_dirs (list[str]): A list of VPU directories.
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    filename=f'{volume_directory}/log.log',
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    filemode='w',  # Overwrite the log file each time
+)
 
-    Returns:
-        None
-    """
 
-    for vpu_dir in vpu_dirs:
-        if not os.path.isdir(vpu_dir):
-            continue
-        vpu = os.path.basename(vpu_dir)
+def _make_inflow_for_vpu(vpu: str) -> None:
+    vpu_dir = os.path.join(configs_dir, vpu)
+    inflow_dir = os.path.join(inflows_dir, vpu)
 
-        inflow_dir = os.path.join(HOME, 'data', 'inflows', vpu)
-        output_dir = os.path.join(HOME, 'data', 'outputs', vpu)
-        init = glob.glob(os.path.join(output_dir, 'Qfinal*.nc'))[0]
-
+    for runoff_file in glob.glob(os.path.join(runoff_dir, '*.nc')):
         create_inflow_file(
-            nc,
+            runoff_file,
             vpu_dir,
             inflow_dir,
-            vpu,
+            vpu_name=vpu,
         )
+    return
 
-        rapid_namelist_from_directories(
+
+def _make_namelists_for_vpu(vpu: str) -> None:
+    vpu_dir = os.path.join(configs_dir, vpu)
+    inflow_dir = os.path.join(inflows_dir, vpu)
+    namelist_dir = os.path.join(namelists_dir, vpu)
+    output_dir = os.path.join(outputs_dir, vpu)
+    qfinal_file = natsort.natsorted(glob.glob(os.path.join(output_dir, 'Qfinal*.nc')))[-1]
+
+    for inflow_file in natsort.natsorted(glob.glob(os.path.join(inflow_dir, 'm3*.nc'))):
+        qfinal_file = rapid_namelist_from_directories(
             vpu_dir,
             inflow_dir,
             namelist_dir,
             output_dir,
-            qinit_file=init
+            qinit_file=qfinal_file
         )
-        namelist = glob.glob(os.path.join(namelist_dir, f'namelist_{vpu}*'))[0]
 
+    for namelist in glob.glob(os.path.join(namelist_dir, vpu, f'namelist*')):
         # Correct the paths in the namelist file
         with open(namelist, 'r') as f:
             text = f.read().replace(HOME, '/mnt')
         with open(namelist, 'w') as f:
             f.write(text)
+    return
 
 
-def get_initial_qinits(s3: s3fs.S3FileSystem,
-                       qfinal_dir: str,
-                       last_retro_time: np.datetime64, ) -> None:
+def inflow_and_namelist() -> None:
+    # For inflows files and multiprocess, for each 1GB of runoff data, we need ~ 6GB for peak memory consumption.
+    # Otherwise, some m3 files will never be written and no error is raised
+    sample_runoff_file = glob.glob(os.path.join(runoff_dir, '*.nc'))[0]
+    processes = min(
+        os.cpu_count(),
+        round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(sample_runoff_file) * 6))
+    )
+    logging.info(f"Using {processes} processes for inflows")
+    vpu_numbers = [os.path.basename(d) for d in glob.glob(os.path.join(configs_dir, '*'))]
+    with Pool(processes) as p:
+        p.starmap(_make_inflow_for_vpu, vpu_numbers)
+        p.starmap(_make_namelists_for_vpu, vpu_numbers)
+
+    # number of expected files = num_configs_dirs * num_runoff_files
+    expected_file_count = len(glob.glob(os.path.join(configs_dir, '*'))) * len(
+        glob.glob(os.path.join(runoff_dir, '*.nc')))
+
+    # check that all inflow files were created correctly
+    if not len(glob.glob(os.path.join(inflows_dir, '*', '*.nc'))) == expected_file_count:
+        raise FileNotFoundError("Not all inflow files were created correctly")
+    # check that all namelists were created correctly
+    if not len(glob.glob(os.path.join(namelists_dir, '*', '*.txt'))) == expected_file_count:
+        raise FileNotFoundError("Not all namelists were created correctly")
+
+    return
+
+
+def get_qinits_from_s3() -> None:
     """
     Get q initialization files from S3.
 
     Parameters:
     - s3: An instance of s3fs.S3FileSystem for accessing S3.
     - vpu_dirs: A list of VPU directories.
-    - qfinal_dir: The directory in S3 where the Qfinal files are stored.
+    - s3_qfinal_dir: The directory in S3 where the Qfinal files are stored.
     - last_retro_time: The last retro time as a numpy datetime64 object.
 
     Raises:
@@ -110,27 +141,30 @@ def get_initial_qinits(s3: s3fs.S3FileSystem,
     Returns:
     - None
     """
-    last_retro_time: str = np.datetime_as_string(last_retro_time, unit='D').replace('-', '')
-    local_qfinals = glob.glob(os.path.join(HOME, 'data', 'outputs', '*', '*Qfinal*.nc'))
-    # If we don't have 125 qfinal files or the qfinal files we do have are not the latest, pull from s3.
-    if len(local_qfinals) != 125 or (
-            len(local_qfinals) > 0 and os.path.basename(local_qfinals[0]).split('_')[-1].split('.')[
-        0] != last_retro_time):
-        s3_qfinals = s3.glob(f"{qfinal_dir}/*/Qfinal*{last_retro_time}.nc")
-        if not s3_qfinals:
-            raise FileNotFoundError(f"Could not find any Qfinal files in {qfinal_dir} for {last_retro_time}")
-        if len(s3_qfinals) != 125:
-            raise FileNotFoundError(f"Expected 125 Qfinal files in {qfinal_dir}, got {len(s3_qfinals)}")
+    # todo check the dates of the qfinal files compared with the zarr and local files
+    # last_retro_time = xr.open_zarr(local_zarr)['time'][-1].values
+    # last_retro_time = np.datetime_as_string(last_retro_time, unit='D').replace('-', '')
+    #
+    # latest_s3_qfinals_per_vpu = [
+    #     natsort.natsorted(s3.glob(f'{s3_qfinal_dir}/{os.path.basename(vpu)}/Qfinal*.nc'))[-1] for vpu in
+    #     glob.glob(os.path.join(HOME, 'data', 'configs', '*'))
+    # ]
+    #
+    # # check that all qfinal dates are the same
+    # # todo
+    #
+    # # check that the latest qfinal files match the date of the last simulation
+    # if not all([last_retro_time in f for f in latest_s3_qfinals_per_vpu]):
+    #     raise FileNotFoundError(f"Most recent Qfinal date doesn't match last date in zarr ({last_retro_time})")
 
-        for f in glob.glob(os.path.join(HOME, 'data', 'outputs', '*', '*Qfinal*.nc')):
-            os.remove(f)
-        logging.info('Pulling qfinal files from s3')
-        for s3_file in s3_qfinals:
-            vpu = os.path.basename(s3_file).split('_')[1]
-            os.makedirs(os.path.join(HOME, 'data', 'outputs', vpu), exist_ok=True)
-            with s3.open(s3_file, 'rb') as s3_f:
-                with open(os.path.join(HOME, 'data', 'outputs', vpu, os.path.basename(s3_file)), 'wb') as local_f:
-                    local_f.write(s3_f.read())
+    # download the qfinal files
+    for vpu in glob.glob(os.path.join(HOME, 'data', 'configs', '*')):
+        vpu = os.path.basename(vpu)
+        most_recent_qfinal = natsort.natsorted(s3.glob(f'{s3_qfinal_dir}/{vpu}/Qfinal*.nc'))[-1]
+        local_file_name = os.path.join(HOME, 'data', 'outputs', vpu, os.path.basename(most_recent_qfinal))
+        if not os.path.exists(local_file_name):
+            s3.get(most_recent_qfinal, local_file_name)
+    return
 
 
 def cache_to_s3(s3: s3fs.S3FileSystem,
@@ -200,38 +234,42 @@ def upload_to_s3(s3: s3fs.S3FileSystem,
             sf.write(f.read())
 
 
-def cleanup(qfinal_dir: str,
-            delete_all: bool = False) -> None:
+def cleanup() -> None:
     """
     Cleans up the working directory by deleting namelists, inflow files, and
     caching qfinals and qouts.
-
-    Args:
-        qfinal_dir (str): The path to the qfinal directory.
-        delete_all (bool, optional): If True, deletes all files in the qfinal
-            directory. Defaults to False.
     """
     # Delete namelists
-    for file in glob.glob(os.path.join(HOME, 'data', 'namelists', '*')):
+    for file in glob.glob(os.path.join(namelists_dir, '*')):
         os.remove(file)
 
-    # Delete inflow files
-    for f in glob.glob(os.path.join(HOME, 'data', 'inflows', '*', '*.nc')):
+    # delete runoff data
+    for file in glob.glob(os.path.join(runoff_dir, '*')):
+        os.remove(file)
+
+    # delete inflow files
+    for f in glob.glob(os.path.join(inflows_dir, '*', '*.nc')):
         os.remove(f)
 
-    # Cache qfinals and qouts, remove
-    cache_to_s3(s3fs.S3FileSystem(), qfinal_dir, delete_all)
+    # delete qouts
+    for f in glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')):
+        os.remove(f)
+
+    # delete all but the most recent qfinal
+    for vpu_dir in glob.glob(os.path.join(configs_dir, '*')):
+        qfinal_files = natsort.natsorted(glob.glob(os.path.join(vpu_dir, 'Qfinal*.nc')))
+        if len(qfinal_files) > 1:
+            for f in qfinal_files[:-1]:
+                os.remove(f)
 
 
-def sync_local_to_s3(local_zarr: str, s3_zarr: str) -> None:
+def sync_local_to_s3() -> None:
     """
-    Embarrassingly fast sync zarr to S3 (~3 minutes for 150k files). 
     Note we only sink necessary files: all Qout/1.*, time/*, and all . files in the zarr
     
     Args:
         local_zarr (str): The local path of the zarr directory.
-        s3_zarr (str): The S3 path where the zarr directory will be synced.
-    
+
     Raises:
         Exception: If the sync command fails.
     """
@@ -245,8 +283,10 @@ def sync_local_to_s3(local_zarr: str, s3_zarr: str) -> None:
             # Otherwise, upload to the top-level folder
             destination = s3_zarr
         commands.append(f"s5cmd --credentials-file {ODP_CREDENTIALS_FILE} cp {f} {destination}/")
-    commands.append(f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/")
-    commands.append(f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only {local_zarr}/time/ {s3_zarr}/time/")
+    commands.append(
+        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only --include=\"*1.*\" {local_zarr}/Qout/ {s3_zarr}/Qout/")
+    commands.append(
+        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --size-only {local_zarr}/time/ {s3_zarr}/time/")
 
     results = []
     for command in commands:
@@ -260,6 +300,7 @@ def sync_local_to_s3(local_zarr: str, s3_zarr: str) -> None:
 
     if any(result.returncode != 0 for result in results):
         raise Exception("Sync failed. Consult the logs.")
+    return
 
 
 def setup_configs() -> None:
@@ -294,7 +335,7 @@ def date_sort(s: str) -> datetime.datetime:
     return datetime.datetime(int(year), int(month), int(day))
 
 
-def check_installations() -> None:
+def _check_installations() -> None:
     """
     Check that the following are installed:
     - awscli
@@ -327,43 +368,53 @@ def check_installations() -> None:
         exit()
 
 
-def main(retro_zarr: str, nc: str, ) -> None:
+def concatenate_outputs() -> None:
+    # Build the week dataset
+    qouts = natsort.natsorted(glob.glob(os.path.join(HOME, 'data', 'outputs', '*', 'Qout*.nc')))
+
+    with xr.open_zarr(local_zarr) as retro_ds:
+        chunks = retro_ds.chunks
+
+    with xr.open_mfdataset(
+            qouts,
+            combine='nested',
+            concat_dim='rivid',
+            preprocess=drop_coords
+    ) as new_ds:
+        earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
+        latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
+        CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
+
+        logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
+        (
+            new_ds
+            .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
+            .to_zarr(local_zarr, mode='a', append_dim=time, consolidated=True)
+        )
+        logging.info(f'Finished appending in {round((time.time() - begin) / 60, 1)} minutes')
+    return
+
+
+def fetch_staged_era5():
     """
-    Assumes docker is installed and this command was run: docker pull chdavid/rapid.
-    Assumes AWS CLI and s5cmd are likewise installed. 
-
-    Executes the main workflow for running the RAPID model.
-
-    Args:
-        retro_zarr (str): The path to the retro zarr dataset.
-        nc (str): The path to the nc file.
-
-    Raises:
-        FileNotFoundError: If not all of the m3 files were generated.
-
-    Returns:
-        None
+    Fetches staged ERA5 files from S3
     """
-    a_qfinal = glob.glob(os.path.join(HOME, 'data', 'outputs', '*', '*Qfinal*.nc'))[0]
-    CL.add_qinit(datetime.datetime.strptime(os.path.basename(a_qfinal).split('_')[2].split('.')[0], '%Y%m%d'))
+    # check that there are files to fetch
+    if not s3.glob(f"{s3_era_bucket}/*.nc"):
+        logging.error(f"No .nc files found in {s3_era_bucket}")
+        raise FileNotFoundError(f"No .nc files found in {s3_era_bucket}")
 
-    # For inflows files and multiprocess, for each 1GB of runoff data, we need ~ 6GB for peak memory consumption. Otherwise, some m3 files will never be written and no error is raised
-    processes = min(multiprocessing.cpu_count(), round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(nc) * 6)))
-    logging.info(f"Using {processes} processes for inflows")
-    CL.log_message('RUNNING', f"Using {processes} processes for inflows")
-    worker_lists = [config_vpu_dirs[i:i + processes] for i in range(0, len(config_vpu_dirs), processes)]
-    with multiprocessing.Pool(processes) as pool:
-        pool.starmap(inflow_and_namelist,
-                     [(HOME, os.path.join(HOME, 'data', 'namelists'), nc, w) for w in worker_lists])
+    # fetch the files
+    subprocess.call(f'aws s3 sync {s3_era_bucket} {runoff_dir} --recursive --include "*"')
 
-    if len(glob.glob(os.path.join(HOME, 'data', 'inflows', '*', 'm3*.nc'))) != 125:
-        raise FileNotFoundError('Not all of the m3 files were generated!!!')
 
+def run_rapid():
     # Run rapid
     logging.info('Running rapid')
     CL.log_message('RUNNING', 'Running RAPID')
     rapid_result = subprocess.run(
-        [f'sudo docker run --rm --name rapid --mount type=bind,source={os.path.join(HOME, "data")},target=/mnt chdavid/rapid python3 /mnt/runrapid.py'],
+        [
+            f'sudo docker run --rm --name rapid --mount type=bind,source={os.path.join(HOME, "data")},target=/mnt chdavid/rapid python3 /mnt/runrapid.py'],
         shell=True,
         capture_output=True,
         text=True
@@ -373,63 +424,51 @@ def main(retro_zarr: str, nc: str, ) -> None:
         raise RuntimeError(rapid_result.stderr)
 
     logging.info(rapid_result.stdout)
-
-    # Build the week dataset
-    qouts = glob.glob(os.path.join(HOME, 'data', 'outputs', '*', 'Qout*.nc'))
-
-    with xr.open_mfdataset(qouts,
-                           combine='nested',
-                           concat_dim='rivid',
-                           preprocess=drop_coords, ).reindex(rivid=xr.open_zarr(retro_zarr)['rivid']) as ds:
-
-        CL.log_message('RUNNING',
-                       f'Appending to zarr: {np.datetime_as_string(ds.time[0].values, unit="h")} to {np.datetime_as_string(ds.time[-1].values, unit="h")}')
-        append_week(ds, retro_zarr)
+    return
 
 
 if __name__ == '__main__':
     try:
-        check_installations()
-        setup_configs()
-        cleanup(qfinal_dir)
         config_vpu_dirs = glob.glob(os.path.join(HOME, 'data', 'configs', '*'))
-        last_retro_time = xr.open_zarr(local_zarr)['time'][-1].values
-        get_initial_qinits(s3, qfinal_dir, last_retro_time)
 
-        ncs = sorted(s3.glob(f"{s3_era_bucket}/*.nc"), key=date_sort)  # Sorted, so that we append correctly by date
-        if not ncs:
-            logging.error(f"Could not find any .nc files in {s3_era_bucket}")
-            raise FileNotFoundError(f"Could not find any .nc files in {s3_era_bucket}")
-        CL.log_message('START', f"Appending {len(ncs)} ERA5 file(s) to {local_zarr}")
-        for i, era_nc in enumerate(ncs):
-            with s3.open(era_nc, 'rb') as s3_file:
-                local_era5_nc = os.path.basename(era_nc)
-                with open(local_era5_nc, 'wb') as local_file:
-                    local_file.write(s3_file.read())
+        CL.log_message('START')
 
-            # Check that the time in the nc will accord with the retrospective zarr
-            era_time = xr.open_dataset(local_era5_nc)['time'].values
-            first_era_time = era_time[0].values
-            last_retro_time = xr.open_zarr(local_zarr)['time'][-1].values
-            CL.add_last_date(last_retro_time)
-            try:
-                CL.add_time_period(era_time)
-            except:
-                logging.warning(f"Could not add time period to cloud log for {era_time}")
-            if last_retro_time + np.timedelta64(1, 'D') != first_era_time:
-                raise ValueError(
-                    f"Time mismatch between {local_era5_nc} and {local_zarr}: got {first_era_time} and {last_retro_time} respectively (the era file should be 1 day behind the zarr). Please check the time in the .nc file and the zarr.")
+        CL.log_message('RUNNING', 'checking installations and environment')
+        _check_installations()
 
-            main(local_zarr, local_era5_nc)
-            if i + 1 < len(ncs):  # Log each time we will run again, except for the last time
-                CL.log_message('RUNNING AGAIN')
-            os.remove(local_era5_nc)
-            s3.rm_file(era_nc)
-            cleanup(qfinal_dir)
+        CL.log_message('RUNNING', 'preparing config files')
+        setup_configs()
 
-        # At last, sync to S3
-        sync_local_to_s3(local_zarr, s3_zarr)
-        cleanup(qfinal_dir)
+        CL.log_message('RUNNING', 'running cleanup on previous runs')
+        cleanup()
+
+        CL.log_message('RUNNING', 'getting initial qinits')
+        get_qinits_from_s3()
+
+        CL.log_message('RUNNING', 'fetching staged daily cumulative era5 runoff netcdfs')
+        fetch_staged_era5()
+
+        CL.log_message('RUNNING', 'preparing inflows and namelists')
+        inflow_and_namelist()
+
+        CL.log_message('RUNNING', 'Running RAPID')
+        run_rapid()
+
+        CL.log_message('RUNNING', 'concatenating outputs')
+        concatenate_outputs()
+
+        CL.log_message('RUNNING', 'caching Qout, Qfinal, and Zarr to S3')
+        sync_local_to_s3()
+
+        CL.log_message('RUNNING', 'Verifying zarr on s3 matches local zarr')
+        # todo
+
+        CL.log_message('RUNNING', 'Deleting runoff from s3')
+        # todo
+
+        CL.log_message('RUNNING', 'cleaning up current run')
+        cleanup()
+
         CL.log_message('COMPLETE')
     except Exception as e:
         error = traceback.format_exc()
