@@ -281,7 +281,9 @@ def sync_local_to_s3() -> None:
     for qout_file in qout_files:
         vpu = os.path.basename(os.path.dirname(qout_file))
         result = subprocess.run(
-            f's5cmd --credentials-file {ODP_CREDENTIALS_FILE} --profile odp cp '
+            f's5cmd '
+            f'--credentials-file {ODP_CREDENTIALS_FILE} --profile odp '
+            f'cp '
             f'{qout_file} '
             f'{GEOGLOWS_ODP_RETROSPECTIVE_BUCKET}/retrospective/{vpu}/{os.path.basename(qout_file)}',
             shell=True, capture_output=True, text=True,
@@ -297,7 +299,9 @@ def sync_local_to_s3() -> None:
     for qfinal_file in qfinal_files:
         vpu = os.path.basename(os.path.dirname(qfinal_file))
         result = subprocess.run(
-            f's5cmd --credentials-file {ODP_CREDENTIALS_FILE} --profile odp cp '
+            f's5cmd '
+            f'--credentials-file {ODP_CREDENTIALS_FILE} --profile odp '
+            f'cp '
             f'{qfinal_file} '
             f'{s3_qfinal_dir}/{vpu}/{os.path.basename(qfinal_file)}',
             shell=True, capture_output=True, text=True,
@@ -309,7 +313,9 @@ def sync_local_to_s3() -> None:
     logging.info('Syncing zarr file root level . files to S3')
     for f in glob.glob(os.path.join(local_zarr, '.*')):
         result = subprocess.run(
-            f"s5cmd --credentials-file {ODP_CREDENTIALS_FILE} --profile odp cp "
+            f"s5cmd "
+            f"--credentials-file {ODP_CREDENTIALS_FILE} --profile odp "
+            f"cp "
             f"{f} "
             f"{s3_zarr}/{os.path.basename(f)}",
             shell=True, capture_output=True, text=True,
@@ -320,7 +326,9 @@ def sync_local_to_s3() -> None:
     # sync the zarr time variable
     logging.info('Syncing zarr time variable to S3')
     result = subprocess.run(
-        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --profile odp --size-only "
+        f"s5cmd "
+        f"--credentials-file {ODP_CREDENTIALS_FILE} --profile odp "
+        f"sync --size-only "
         f"{local_zarr}/time/ "
         f"{s3_zarr}/time/",
         shell=True, capture_output=True, text=True,
@@ -331,7 +339,9 @@ def sync_local_to_s3() -> None:
     # sync the zarr Qout variable's 1.* files
     logging.info('Syncing zarr Qout variable 1.* files to S3')
     result = subprocess.run(
-        f"s5cmd sync --credentials-file {ODP_CREDENTIALS_FILE} --profile odp --size-only --include=\"*1.*\" "
+        f"s5cmd "
+        f"--credentials-file {ODP_CREDENTIALS_FILE} --profile odp "
+        f"sync --size-only --include=\"*1.*\" "
         f"{local_zarr}/Qout/ "
         f"{s3_zarr}/Qout/",
         shell=True, capture_output=True, text=True,
@@ -456,33 +466,31 @@ def run_rapid():
 
 if __name__ == '__main__':
     try:
-        config_vpu_dirs = glob.glob(os.path.join(HOME, 'data', 'configs', '*'))
-
         CL.log_message('START')
 
         CL.log_message('RUNNING', 'checking installations and environment')
-        # _check_installations()
+        _check_installations()
 
         CL.log_message('RUNNING', 'preparing config files')
-        # setup_configs()
+        setup_configs()
 
         CL.log_message('RUNNING', 'running cleanup on previous runs')
-        # cleanup()
+        cleanup()
 
         CL.log_message('RUNNING', 'getting initial qinits')
-        # get_qinits_from_s3()
+        get_qinits_from_s3()
 
         CL.log_message('RUNNING', 'fetching staged daily cumulative era5 runoff netcdfs')
-        # fetch_staged_era5()
+        fetch_staged_era5()
 
         CL.log_message('RUNNING', 'preparing inflows and namelists')
-        # inflow_and_namelist()
+        inflow_and_namelist()
 
         CL.log_message('RUNNING', 'Running RAPID')
-        # run_rapid()
+        run_rapid()
 
         CL.log_message('RUNNING', 'concatenating outputs')
-        # concatenate_outputs()
+        concatenate_outputs()
 
         CL.log_message('RUNNING', 'caching Qout, Qfinal, and Zarr to S3')
         sync_local_to_s3()
@@ -494,7 +502,7 @@ if __name__ == '__main__':
         # todo
 
         CL.log_message('RUNNING', 'cleaning up current run')
-        # cleanup()
+        cleanup()
 
         CL.log_message('COMPLETE')
     except Exception as e:
