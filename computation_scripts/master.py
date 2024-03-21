@@ -318,23 +318,6 @@ def setup_configs() -> None:
             logging.error(f"Config file sync error: {result.stderr}")
 
 
-def date_sort(s: str) -> datetime.datetime:
-    """
-    Returns the date of the file as a datetime object.
-
-    Args:
-        s (str): The string .
-
-    Returns:
-        dateime: datetime representation of the string.
-    """
-    x = os.path.basename(s).split('.')[0].split('_')[1:]
-    year = x[0] if '-' not in x[0] else x[0].split('-')[1]
-    month = x[1] if '-' not in x[1] else x[1].split('-')[1]
-    day = x[2].split('-')[1]
-    return datetime.datetime(int(year), int(month), int(day))
-
-
 def _check_installations() -> None:
     """
     Check that the following are installed:
