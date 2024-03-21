@@ -389,8 +389,8 @@ def fetch_staged_era5():
 
     # fetch the files
     logging.info(f'Fetching ERA5 runoff files from {s3_era_bucket}')
-    logging.info(f'aws s3 sync {s3_era_bucket} {runoff_dir} --include "*"')
-    subprocess.run(['aws', 's3', 'sync', s3_era_bucket, runoff_dir, '--include', '"*"'], shell=True)
+    logging.info(f'aws s3 cp {s3_era_bucket} {runoff_dir} --recursive --include "*"')
+    subprocess.run(['aws', 's3', 'cp', s3_era_bucket, runoff_dir, '--recursive', '--include', '"*"'], shell=True)
     return
 
 
