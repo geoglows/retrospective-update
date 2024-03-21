@@ -1,17 +1,18 @@
-import cdsapi
-import dask
-import boto3
-import s3fs
-import xarray as xr
-import numpy as np
-import pandas as pd
-
-from threading import Thread
-from queue import Queue
-import traceback
 import glob
 import os
+import subprocess
+import traceback
 from datetime import datetime
+from queue import Queue
+from threading import Thread
+
+import boto3
+import cdsapi
+import dask
+import numpy as np
+import pandas as pd
+import s3fs
+import xarray as xr
 
 from cloud_logger import CloudLog
 
@@ -85,9 +86,6 @@ def download_era5() -> None:
     bucket_uri = os.path.join(GEOGLOWS_ODP_RETROSPECTIVE_BUCKET, GEOGLOWS_ODP_RETROSPECTIVE_ZARR)
     s3_odp = s3fs.S3FileSystem(anon=True, client_kwargs=dict(region_name=GEOGLOWS_ODP_REGION))
     retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3_odp, check=False)
-
-    print('connecting to S3')
-    s3_era5 = boto3.client('s3', aws_access_key_id=ACCESS_KEY_ID, aws_secret_access_key=SECRET_ACCESS_KEY)
 
     print('checking last date')
     try:
@@ -211,7 +209,7 @@ def download_era5() -> None:
                 outname = os.path.basename(ncs_to_use)
             print(f'outname: {outname}')
             print(f'{s3_era_bucket}/{outname}')
-            s3_era5.upload_file('temp.nc', s3_era_bucket, f'{outname}')
+            subprocess.call(['aws', 's3', 'cp', 'temp.nc', f'{s3_era_bucket}/{outname}'])
             print('uploaded')
 
             # Remove uncombin
