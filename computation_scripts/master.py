@@ -120,7 +120,7 @@ def inflow_and_namelist() -> None:
     if not len(glob.glob(os.path.join(inflows_dir, '*', '*.nc'))) == expected_file_count:
         raise FileNotFoundError("Not all inflow files were created correctly")
     # check that all namelists were created correctly
-    if not len(glob.glob(os.path.join(namelists_dir, '*', '*.txt'))) == expected_file_count:
+    if not len(glob.glob(os.path.join(namelists_dir, '*', 'namelist*'))) == expected_file_count:
         raise FileNotFoundError("Not all namelists were created correctly")
 
     return
