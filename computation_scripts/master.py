@@ -240,7 +240,7 @@ def cleanup() -> None:
     caching qfinals and qouts.
     """
     # Delete namelists
-    for file in glob.glob(os.path.join(namelists_dir, '*')):
+    for file in glob.glob(os.path.join(namelists_dir, '*', '*')):
         os.remove(file)
 
     # delete runoff data
