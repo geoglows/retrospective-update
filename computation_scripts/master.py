@@ -356,6 +356,9 @@ def concatenate_outputs() -> None:
     # Build the week dataset
     qouts = natsort.natsorted(glob.glob(os.path.join(HOME, 'data', 'outputs', '*', 'Qout*.nc')))
 
+    if not qouts:
+        raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
+
     with xr.open_zarr(local_zarr) as retro_ds:
         chunks = retro_ds.chunks
 
