@@ -91,7 +91,7 @@ def _make_namelists_for_vpu(vpu: str) -> None:
     for namelist in glob.glob(os.path.join(namelist_dir, f'namelist*')):
         # Correct the paths in the namelist file
         with open(namelist, 'r') as f:
-            text = f.read().replace(HOME, '/mnt')
+            text = f.read().replace(os.path.join(HOME, 'data'), '/mnt')
         with open(namelist, 'w') as f:
             f.write(text)
     return
