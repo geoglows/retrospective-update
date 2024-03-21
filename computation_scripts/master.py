@@ -39,7 +39,7 @@ s3_zarr = os.getenv('S3_ZARR')
 # Directory containing subdirectories, containing Qfinal files
 qfinal_dir = os.getenv('S3_QFINAL_DIR')
 # Directory containing the ERA5 data
-ERA_DIR = os.getenv('S3_ERA_DIR')
+s3_era_bucket = os.getenv('S3_ERA_BUCKET')
 # Local zarr to append to
 local_zarr = os.path.join(volume_directory, os.getenv('LOCAL_ZARR_NAME'))  # Local zarr to append to
 
@@ -396,10 +396,10 @@ if __name__ == '__main__':
         last_retro_time = xr.open_zarr(local_zarr)['time'][-1].values
         get_initial_qinits(s3, qfinal_dir, last_retro_time)
 
-        ncs = sorted(s3.glob(f"{ERA_DIR}/*.nc"), key=date_sort)  # Sorted, so that we append correctly by date
+        ncs = sorted(s3.glob(f"{s3_era_bucket}/*.nc"), key=date_sort)  # Sorted, so that we append correctly by date
         if not ncs:
-            logging.error(f"Could not find any .nc files in {ERA_DIR}")
-            raise FileNotFoundError(f"Could not find any .nc files in {ERA_DIR}")
+            logging.error(f"Could not find any .nc files in {s3_era_bucket}")
+            raise FileNotFoundError(f"Could not find any .nc files in {s3_era_bucket}")
         CL.log_message('START', f"Appending {len(ncs)} ERA5 file(s) to {local_zarr}")
         for i, era_nc in enumerate(ncs):
             with s3.open(era_nc, 'rb') as s3_file:
