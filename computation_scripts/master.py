@@ -239,28 +239,36 @@ def cleanup() -> None:
     Cleans up the working directory by deleting namelists, inflow files, and
     caching qfinals and qouts.
     """
+    # change the owner of the data directory and all sub files and directories to the ubuntu user
+    os.system(f'sudo chown -R ubuntu:ubuntu {HOME}/data')
+
     # Delete namelists
+    logging.info('Deleting namelists')
     for file in glob.glob(os.path.join(namelists_dir, '*', '*')):
         os.remove(file)
 
     # delete runoff data
+    logging.info('Deleting runoff data')
     for file in glob.glob(os.path.join(runoff_dir, '*')):
         os.remove(file)
 
     # delete inflow files
-    for f in glob.glob(os.path.join(inflows_dir, '*', '*.nc')):
-        os.remove(f)
+    logging.info('Deleting inflow files')
+    for file in glob.glob(os.path.join(inflows_dir, '*', '*.nc')):
+        os.remove(file)
 
     # delete qouts
-    for f in glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')):
-        os.remove(f)
+    logging.info('Deleting qouts')
+    for file in glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')):
+        os.remove(file)
 
     # delete all but the most recent qfinal
+    logging.info('Deleting qfinals')
     for vpu_dir in glob.glob(os.path.join(configs_dir, '*')):
         qfinal_files = natsort.natsorted(glob.glob(os.path.join(vpu_dir, 'Qfinal*.nc')))
         if len(qfinal_files) > 1:
-            for f in qfinal_files[:-1]:
-                os.remove(f)
+            for file in qfinal_files[:-1]:
+                os.remove(file)
 
 
 def sync_local_to_s3() -> None:
@@ -504,6 +512,7 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'cleaning up current run')
         cleanup()
 
+        logging.info('Completed')
         CL.log_message('COMPLETE')
     except Exception as e:
         error = traceback.format_exc()
