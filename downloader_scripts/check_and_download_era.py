@@ -8,17 +8,16 @@ from threading import Thread
 
 import boto3
 import cdsapi
-import dask
 import numpy as np
 import pandas as pd
 import s3fs
 import xarray as xr
+from natsort import natsorted
 
 from cloud_logger import CloudLog
 
 # ERA5 has a lag time of ~6 days (a week for rounding)
 MIN_LAG_TIME_DAYS = 5
-MAX_DAYS_PER_DOWNLOAD_CHUNK = 14
 
 GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
@@ -65,9 +64,10 @@ class DownloadWorker(Thread):
         Retrieves download parameters from the queue and calls the retrieve_data function.
         """
         while True:
-            era_dir, client, year, month, days = self.queue.get()
+            client, year, month, days = self.queue.get()
             try:
-                retrieve_data(era_dir, client, year, month, days)
+                retrieve_data(client, year, month, days)
+                # ...
             finally:
                 self.queue.task_done()
 
@@ -89,142 +89,145 @@ def download_era5() -> None:
     retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3_odp, check=False)
 
     print('checking last date')
-    # try:
-    #     last_date = xr.open_zarr(retro_zarr)['time'][-1].values
-    # except IndexError:
-    #     last_date = xr.open_zarr(retro_zarr)['time'].values
-    last_date = pd.to_datetime('2022-12-31')
-    print(last_date)
+    try:
+        last_date = xr.open_zarr(retro_zarr)['time'][-1].values
+    except IndexError:
+        last_date = xr.open_zarr(retro_zarr)['time'].values
+    last_date = pd.to_datetime(last_date)
+    today = pd.to_datetime(datetime.now().date())
+    print(f'last_date: {last_date}')
     CL.add_last_date(last_date)
 
-    # run_again = False
     if pd.to_datetime(last_date + np.timedelta64(MIN_LAG_TIME_DAYS, 'D')) > datetime.now():
         # If the last date in the zarr file is within MIN_LAG_TIME_DAYS of today then exit
         CL.log_message(f'{last_date} is within {MIN_LAG_TIME_DAYS} days of today. Not running')
         return
 
-    last_date = pd.to_datetime(last_date)
-    today = pd.to_datetime(datetime.now().date())
     date_range = pd.date_range(start=last_date + pd.DateOffset(days=1),
                                end=today - pd.DateOffset(days=MIN_LAG_TIME_DAYS),
                                freq='D', )
-    number_of_days = len(date_range)
-    times_to_download = [date_range[i:i + MAX_DAYS_PER_DOWNLOAD_CHUNK].tolist() for i in
-                         range(0, number_of_days, MAX_DAYS_PER_DOWNLOAD_CHUNK)]
-    # Remove the last list if it is less than 7 days
-    if len(times_to_download[-1]) < MIN_LAG_TIME_DAYS:
-        times_to_download.pop(-1)
-
+    print(date_range[0])
+    print(date_range[-1])
     CL.add_time_period(date_range.tolist())
     CL.log_message('RUNNING', "Beginning download")
-    max_weeks = 6  # 50 weeks buffer gives 20 GB extra space
-    times_to_download_split = [times_to_download[i:i + max_weeks] for i in range(0, len(times_to_download), max_weeks)]
-    print(f'time_to_download_split: {times_to_download_split}')
-    for times_to_download in times_to_download_split:
-        requests = []
-        num_requests = 0
-        ncs = glob.glob(os.path.join(era_dir, '*.nc'))
 
-        for time_list in times_to_download:
-            years = {d.year for d in time_list}
-            months = {d.month for d in time_list}
+    # authenticate with AWS for the bucket that contains the ERA5 data using boto3
+    print('checking for files already on s3')
+    s3 = boto3.client('s3', aws_access_key_id=ACCESS_KEY_ID, aws_secret_access_key=SECRET_ACCESS_KEY)
+    s3_files = s3.list_objects(Bucket=s3_era_bucket[5:])  # remove the s3:// prefix
+    s3_files = [file['Key'] for file in s3_files['Contents']] if 'Contents' in s3_files else []
+    print('files found on s3')
+    print(s3_files)
 
-            # Create a request for each month for each year, using only the days in that month. This will support any timespan
-            for year in years:
-                for month in months:
-                    days = sorted({t.day for t in time_list if t.year == year and t.month == month})
-                    if month in {t.month for t in time_list if t.year == year} and not is_downloaded(ncs, year, month,
-                                                                                                     days):
-                        requests.append((era_dir, c, year, month, days))
-                        num_requests += 1
+    # make a list of unique year and month combinations in the list
+    download_requests = []
+    year_month_combos = {(d.year, d.month) for d in date_range}
+    # sort by year and month
+    year_month_combos = natsorted(year_month_combos)
+    print(year_month_combos)
+    for year, month in year_month_combos:
+        download_dates = [d for d in date_range if d.year == year and d.month == month]
+        days = [d.day for d in download_dates]
+        expected_file_name = date_to_file_name(year, month, days)
+        # if we already have the file locally, skip
+        if os.path.exists(os.path.join(MNT_DIR, 'era5_data', expected_file_name)):
+            print(f'{expected_file_name} already exists locally')
+            continue
+        # if we already have the file on the s3 bucket, skip
+        if f'{expected_file_name}' in s3_files:
+            print(f'{expected_file_name} already exists in the bucket')
+            continue
+        download_requests.append((c, year, month, days))
 
-        # Use multithreading so that we can make more requests at once if need be
-        num_processes = min(num_requests, os.cpu_count() * 8, )
-
+    if download_requests:
+        print('beginning downloads')
+        print(download_requests)
+        CL.log_message('DOWNLOADING', "Beginning downloads")
+        num_processes = min(len(download_requests), os.cpu_count())
         queue = Queue()
-        print(f'num_processes: {num_processes}')
         for _ in range(num_processes):
             worker = DownloadWorker(queue)
             worker.daemon = True
             worker.start()
-        print(f'requests: {requests}')
-        for request in requests:
+        for request in download_requests:
             queue.put(request)
         queue.join()
 
-        # Check that the number of files downloaded match the number of requests
-        print(ncs)
-        ncs = sorted(glob.glob(os.path.join(era_dir, '*.nc')), key=date_sort)
+        print('downloads completed')
 
-        netcdf_pairs = []
-        skip = False
-        for nc in ncs:
-            if skip:
-                skip = False
+    print('processing files')
+    CL.log_message('PROCESSING', "Processing downloaded era5 files")
+    downloaded_files = natsorted(glob.glob(os.path.join(era_dir, '*.nc')))
+    if not downloaded_files:
+        print('No downloaded files to process')
+        CL.log_message('FINISHED', "No files were downloaded")
+        return
+
+    print('converting to daily cumulative')
+    for downloaded_file in downloaded_files:
+        daily_cumulative_file_name = os.path.basename(downloaded_file).replace('.nc', '_daily_cumulative.nc')
+        with xr.open_dataset(downloaded_file) as ds:
+            print(f'processing {downloaded_file}')
+
+            if ds['time'].shape[0] == 0:
+                print(f'No time steps were downloaded- the shape of the time array is 0.')
+                print(f'Removing {downloaded_file}')
+                os.remove(downloaded_file)
                 continue
-            first_day, last_day = nc.split('_')[4].split('.')[0].split('-')
-            if int(last_day) - int(first_day) + 1 == 7:
-                netcdf_pairs.append(nc)
-            else:
-                netcdf_pairs.append([nc, ncs[ncs.index(nc) + 1]])
-                skip = True
 
-        print(f'netcdf_pairs: {netcdf_pairs}')
-        for ncs_to_use in netcdf_pairs:
-            with dask.config.set(**{'array.slicing.split_large_chunks': False}):
+            if 'expver' in ds.dims:
+                print('expver in dims')
+                # find the time steps where the runoff is not nan when expver=1
+                a = ds.ro.sel(latitude=0, longitude=0, expver=1)
+                expver1_timesteps = a.time[~np.isnan(a)]
+
+                # find the time steps where the runoff is not nan when expver=5
+                b = ds.ro.sel(latitude=0, longitude=0, expver=5)
+                expver5_timesteps = b.time[~np.isnan(b)]
+
+                # assert that the two timesteps combined are the same as the original
+                assert len(ds.time) == len(expver1_timesteps) + len(expver5_timesteps)
+
+                # combine the two
                 ds = (
                     xr
-                    .open_mfdataset(
-                        ncs_to_use,
-                        concat_dim='time',
-                        combine='nested',
-                        parallel=True,
-                        chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
-                        # Chunk to prevent weird Slicing behavior and missing data
-                        preprocess=process_expver_variable
+                    .concat(
+                        [
+                            ds.sel(expver=1, time=expver1_timesteps.values).drop_vars('expver'),
+                            ds.sel(expver=5, time=expver5_timesteps.values).drop_vars('expver')
+                        ],
+                        dim='time'
                     )
-                    .sortby('time')
-                    .groupby('time.date')
-                    .sum(dim='time')  # Convert to daily
-                    .rename({'date': 'time'})
                 )
-                ds['time'] = ds['time'].values.astype('datetime64[ns]')
 
-            # Make sure all days were downloaded
-            if ds['time'].shape[0] == 0:
-                raise ValueError(f'No time steps were downloaded- the shape of the time array is 0.')
+            print('converting to daily cumulative')
+            ds = (
+                ds
+                .groupby('time.date')
+                .sum(dim='time')  # Convert to daily
+                .rename({'date': 'time'})
+            )
+            ds['time'] = ds['time'].values.astype('datetime64[ns]')
+            ds.to_netcdf(os.path.join(era_dir, daily_cumulative_file_name))
+            print(f'uploading {daily_cumulative_file_name}')
+            subprocess.call(['aws', 's3', 'cp', os.path.join(era_dir, daily_cumulative_file_name),
+                             os.path.join(s3_era_bucket, os.path.basename(downloaded_file))])
 
-            ds.to_netcdf('temp.nc')
-            if isinstance(ncs_to_use, list):
-                outname = "era5_"
-                nc_year = ncs_to_use[0].split('_')[2]
-                nc_month = ncs_to_use[0].split('_')[3]
-                nc_days = ncs_to_use[0].split('_')[4].split('.')[0].split('-')
-                if nc_year != ncs_to_use[1].split('_')[2]:
-                    outname += f"{nc_year}-{ncs_to_use[1].split('_')[2]}_"
-                else:
-                    outname += f"{nc_year}_"
-                if nc_month != ncs_to_use[1].split('_')[3]:
-                    outname += f"{nc_month}-{ncs_to_use[1].split('_')[3]}_"
-                else:
-                    outname += f"{nc_month}_"
-                outname += f"{nc_days[0]}-{ncs_to_use[1].split('_')[4].split('.')[0].split('-')[-1]}.nc"
-            else:
-                outname = os.path.basename(ncs_to_use)
-            print(f'outname: {outname}')
-            print(f'{s3_era_bucket}/{outname}')
-            subprocess.call(['aws', 's3', 'cp', 'temp.nc', f'{s3_era_bucket}/{outname}'])
-            print('uploaded')
+            # remove the original file
+            os.remove(downloaded_file)
 
-            # Remove uncombine
-            if isinstance(ncs_to_use, str):
-                ncs_to_use = [ncs_to_use]
-            for nc in ncs_to_use:
-                os.remove(nc)
+            # remove the consolidated file
+            os.remove(os.path.join(era_dir, daily_cumulative_file_name))
 
 
-def retrieve_data(era_dir: str,
-                  client: cdsapi.Client,
+def date_to_file_name(year: int, month: int, days: list[int]) -> str:
+    padded_month = str(month).zfill(2)
+    padded_day_0 = str(days[0]).zfill(2)
+    padded_day_1 = str(days[-1]).zfill(2)
+    return f'era5_{year}{padded_month}{padded_day_0}-{year}{padded_month}{padded_day_1}.nc'
+
+
+def retrieve_data(client: cdsapi.Client,
                   year: int,
                   month: int,
                   days: list[int], ) -> None:
@@ -232,7 +235,6 @@ def retrieve_data(era_dir: str,
     Retrieves era5 data.
 
     Args:
-        era_dir (str): The directory where the data will be saved.
         client (cdsapi.Client): The CDS API client.
         year (int): The year of the data.
         month (int): The month of the data.
@@ -241,6 +243,8 @@ def retrieve_data(era_dir: str,
     Returns:
         None
     """
+    era_dir = os.path.join(MNT_DIR, 'era5_data')
+    file_name = date_to_file_name(year, month, days)
     client.retrieve(
         f'reanalysis-era5-single-levels',
         {
@@ -252,75 +256,8 @@ def retrieve_data(era_dir: str,
             'day': [str(day).zfill(2) for day in days],
             'time': [f'{x:02d}:00' for x in range(0, 24)],
         },
-        target=os.path.join(era_dir, f'era5_{year}_{month}_{days[0]}-{days[-1]}.nc')
+        target=os.path.join(era_dir, file_name)
     )
-
-
-def date_sort(s: str) -> datetime:
-    """
-    Sorts the string by the date.
-
-    Args:
-        s (str): The string to be sorted.
-
-    Returns:
-        bool: The sorted string.
-    """
-    x = os.path.basename(s).split('.')[0].split('_')[1:]
-    return datetime(int(x[0]), int(x[1]), int(x[2].split('-')[1]))
-
-
-def process_expver_variable(ds: xr.Dataset, ) -> xr.DataArray:
-    """
-    Function used in opening the downloaded files. If 'expver' is found, raise an error, since we should not use these files.
-
-    Parameters:
-    ds (xr.Dataset): The dataset containing the downloaded files.
-    runoff (str): The variable name for the runoff data. Default is 'ro'.
-
-    Returns:
-    xr.DataArray: The selected variable data array.
-
-    Raises:
-    ValueError: If 'expver' dimension is found in the dataset.
-    """
-    # find the time steps where the runoff is not nan when expver=1
-    a = ds.ro.sel(latitude=0, longitude=0, expver=1)
-    expver1_timesteps = a.time[~np.isnan(a)]
-
-    # find the time steps where the runoff is not nan when expver=5
-    b = ds.ro.sel(latitude=0, longitude=0, expver=5)
-    expver5_timesteps = b.time[~np.isnan(b)]
-
-    # assert that the two timesteps combined are the same as the original
-    assert len(ds.time) == len(expver1_timesteps) + len(expver5_timesteps)
-
-    # combine the two
-    return (
-        xr
-        .concat(
-            [
-                ds.sel(expver=1, time=expver1_timesteps.values).drop_vars('expver'),
-                ds.sel(expver=5, time=expver5_timesteps.values).drop_vars('expver')
-            ],
-            dim='time'
-        )
-        ['ro']
-    )
-
-
-def is_downloaded(ncs: list[str],
-                  year: str,
-                  month: str,
-                  days: list[int]) -> bool:
-    # Check any already downloaded era 5 files to see if we need to download this time period
-    for nc in ncs:
-        nc_year = int(nc.split('_')[2])
-        nc_month = int(nc.split('_')[3])
-        nc_days = [int(x) for x in nc.split('_')[4].split('.')[0].split('-')]
-        if nc_year == year and nc_month == month and set(nc_days).issubset(set(days)):
-            return True
-    return False
 
 
 if __name__ == "__main__":
@@ -329,6 +266,7 @@ if __name__ == "__main__":
     """
     try:
         print('Starting')
+        CL.log_message('STARTING', 'preparing to download era5 data')
         download_era5()
         ec2 = boto3.client('ec2', region_name=region_name)
         ec2.start_instances(InstanceIds=[compute_instance])
