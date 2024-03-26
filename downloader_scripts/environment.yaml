@@ -20,3 +20,4 @@ dependencies:
   - s3fs
   - xarray
   - zarr
+  - natsort

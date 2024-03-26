@@ -17,7 +17,8 @@ import xarray as xr
 from cloud_logger import CloudLog
 
 # ERA5 has a lag time of ~6 days (a week for rounding)
-MIN_LAG_TIME_DAYS = 7
+MIN_LAG_TIME_DAYS = 5
+MAX_DAYS_PER_DOWNLOAD_CHUNK = 14
 
 GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
@@ -88,10 +89,11 @@ def download_era5() -> None:
     retro_zarr = s3fs.S3Map(root=bucket_uri, s3=s3_odp, check=False)
 
     print('checking last date')
-    try:
-        last_date = xr.open_zarr(retro_zarr)['time'][-1].values
-    except IndexError:
-        last_date = xr.open_zarr(retro_zarr)['time'].values
+    # try:
+    #     last_date = xr.open_zarr(retro_zarr)['time'][-1].values
+    # except IndexError:
+    #     last_date = xr.open_zarr(retro_zarr)['time'].values
+    last_date = pd.to_datetime('2022-12-31')
     print(last_date)
     CL.add_last_date(last_date)
 
@@ -107,20 +109,22 @@ def download_era5() -> None:
                                end=today - pd.DateOffset(days=MIN_LAG_TIME_DAYS),
                                freq='D', )
     number_of_days = len(date_range)
-    times_to_download = [date_range[i:i + 7].tolist() for i in range(0, number_of_days, 7)]
+    times_to_download = [date_range[i:i + MAX_DAYS_PER_DOWNLOAD_CHUNK].tolist() for i in
+                         range(0, number_of_days, MAX_DAYS_PER_DOWNLOAD_CHUNK)]
     # Remove the last list if it is less than 7 days
     if len(times_to_download[-1]) < MIN_LAG_TIME_DAYS:
         times_to_download.pop(-1)
 
     CL.add_time_period(date_range.tolist())
     CL.log_message('RUNNING', "Beginning download")
-    max_weeks = 200  # 50 weeks buffer gives 20 GB extra space
+    max_weeks = 6  # 50 weeks buffer gives 20 GB extra space
     times_to_download_split = [times_to_download[i:i + max_weeks] for i in range(0, len(times_to_download), max_weeks)]
     print(f'time_to_download_split: {times_to_download_split}')
     for times_to_download in times_to_download_split:
         requests = []
         num_requests = 0
         ncs = glob.glob(os.path.join(era_dir, '*.nc'))
+
         for time_list in times_to_download:
             years = {d.year for d in time_list}
             months = {d.month for d in time_list}
@@ -135,7 +139,7 @@ def download_era5() -> None:
                         num_requests += 1
 
         # Use multithreading so that we can make more requests at once if need be
-        num_processes = min(num_requests, os.cpu_count() * 8)
+        num_processes = min(num_requests, os.cpu_count() * 8, )
 
         queue = Queue()
         print(f'num_processes: {num_processes}')
@@ -212,11 +216,11 @@ def download_era5() -> None:
             subprocess.call(['aws', 's3', 'cp', 'temp.nc', f'{s3_era_bucket}/{outname}'])
             print('uploaded')
 
-            # Remove uncombin
+            # Remove uncombine
             if isinstance(ncs_to_use, str):
                 ncs_to_use = [ncs_to_use]
-            for nc in ncs_to_use:
-                os.remove(nc)
+            # for nc in ncs_to_use:
+            #     os.remove(nc)
 
 
 def retrieve_data(era_dir: str,
@@ -266,8 +270,7 @@ def date_sort(s: str) -> datetime:
     return datetime(int(x[0]), int(x[1]), int(x[2].split('-')[1]))
 
 
-def process_expver_variable(ds: xr.Dataset,
-                            runoff: str = 'ro') -> xr.DataArray:
+def process_expver_variable(ds: xr.Dataset, ) -> xr.DataArray:
     """
     Function used in opening the downloaded files. If 'expver' is found, raise an error, since we should not use these files.
 
@@ -281,9 +284,29 @@ def process_expver_variable(ds: xr.Dataset,
     Raises:
     ValueError: If 'expver' dimension is found in the dataset.
     """
-    if 'expver' in ds.dims:
-        raise ValueError('"expver" found in downloaded ERA files')
-    return ds[runoff]
+    # find the time steps where the runoff is not nan when expver=1
+    a = ds.ro.sel(latitude=0, longitude=0, expver=1)
+    expver1_timesteps = a.time[~np.isnan(a)]
+
+    # find the time steps where the runoff is not nan when expver=5
+    b = ds.ro.sel(latitude=0, longitude=0, expver=5)
+    expver5_timesteps = b.time[~np.isnan(b)]
+
+    # assert that the two timesteps combined are the same as the original
+    assert len(ds.time) == len(expver1_timesteps) + len(expver5_timesteps)
+
+    # combine the two
+    return (
+        xr
+        .concat(
+            [
+                ds.sel(expver=1, time=expver1_timesteps.values).drop_vars('expver'),
+                ds.sel(expver=5, time=expver5_timesteps.values).drop_vars('expver')
+            ],
+            dim='time'
+        )
+        ['ro']
+    )
 
 
 def is_downloaded(ncs: list[str],
@@ -307,10 +330,25 @@ if __name__ == "__main__":
     try:
         print('Starting')
         download_era5()
-
-        ec2 = boto3.client('ec2', region_name=region_name)
-        ec2.start_instances(InstanceIds=[compute_instance])
-        CL.log_message('FINISHED')
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        download_era5()
+        # ec2 = boto3.client('ec2', region_name=region_name)
+        # ec2.start_instances(InstanceIds=[compute_instance])
+        # CL.log_message('FINISHED')
     except Exception as e:
         print(traceback.format_exc())
         CL.log_message('FAIL', traceback.format_exc())
