@@ -219,8 +219,8 @@ def download_era5() -> None:
             # Remove uncombine
             if isinstance(ncs_to_use, str):
                 ncs_to_use = [ncs_to_use]
-            # for nc in ncs_to_use:
-            #     os.remove(nc)
+            for nc in ncs_to_use:
+                os.remove(nc)
 
 
 def retrieve_data(era_dir: str,
@@ -330,25 +330,9 @@ if __name__ == "__main__":
     try:
         print('Starting')
         download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        download_era5()
-        # ec2 = boto3.client('ec2', region_name=region_name)
-        # ec2.start_instances(InstanceIds=[compute_instance])
-        # CL.log_message('FINISHED')
+        ec2 = boto3.client('ec2', region_name=region_name)
+        ec2.start_instances(InstanceIds=[compute_instance])
+        CL.log_message('FINISHED')
     except Exception as e:
         print(traceback.format_exc())
         CL.log_message('FAIL', traceback.format_exc())
