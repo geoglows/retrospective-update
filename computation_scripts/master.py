@@ -204,11 +204,11 @@ def cache_to_s3(s3: s3fs.S3FileSystem,
 def drop_coords(ds: xr.Dataset, qout: str = 'Qout'):
     """
     Helps load faster, gets rid of variables/dimensions we do not need (lat, lon, etc.)
-    
+
     Parameters:
         ds (xr.Dataset): The input dataset.
         qout (str): The variable name to keep in the dataset.
-        
+
     Returns:
         xr.Dataset: The modified dataset with only the specified variable.
     """
@@ -274,7 +274,7 @@ def cleanup() -> None:
 def sync_local_to_s3() -> None:
     """
     Note we only sink necessary files: all Qout/1.*, time/*, and all . files in the zarr
-    
+
     Args:
         local_zarr (str): The local path of the zarr directory.
 
@@ -472,47 +472,70 @@ def run_rapid():
     return
 
 
+def delete_runoff_from_s3():
+    """
+    Deletes the runoff files from S3
+    """
+    logging.info(f'Deleting runoff files from {s3_era_bucket}')
+    for f in s3.glob(f'{s3_era_bucket}/*.nc'):
+        if os.path.basename(f) in glob.glob(os.path.join(runoff_dir, '*.nc')):
+            continue
+        s3.rm(f)
+    return
+
+
 if __name__ == '__main__':
     try:
         CL.log_message('START')
 
         CL.log_message('RUNNING', 'checking installations and environment')
+        print('Checking installations and environment')
         _check_installations()
 
         CL.log_message('RUNNING', 'preparing config files')
+        print('Preparing config files')
         setup_configs()
 
         CL.log_message('RUNNING', 'running cleanup on previous runs')
+        print('Running cleanup on previous runs')
         cleanup()
 
         CL.log_message('RUNNING', 'getting initial qinits')
+        print('Getting initial qinits')
         get_qinits_from_s3()
 
         CL.log_message('RUNNING', 'fetching staged daily cumulative era5 runoff netcdfs')
+        print('Fetching staged daily cumulative era5 runoff netcdfs')
         fetch_staged_era5()
 
         CL.log_message('RUNNING', 'preparing inflows and namelists')
+        print('Preparing inflows and namelists')
         inflow_and_namelist()
 
         CL.log_message('RUNNING', 'Running RAPID')
+        print('Running RAPID')
         run_rapid()
 
         CL.log_message('RUNNING', 'concatenating outputs')
+        print('Concatenating outputs')
         concatenate_outputs()
 
         CL.log_message('RUNNING', 'caching Qout, Qfinal, and Zarr to S3')
+        print('Caching Qout, Qfinal, and Zarr to S3')
         sync_local_to_s3()
 
         CL.log_message('RUNNING', 'Verifying zarr on s3 matches local zarr')
         # todo
 
         CL.log_message('RUNNING', 'Deleting runoff from s3')
-        # todo
+        print('Deleting runoff from s3')
+        delete_runoff_from_s3()
 
         CL.log_message('RUNNING', 'cleaning up current run')
         cleanup()
 
         logging.info('Completed')
+        print('Completed')
         CL.log_message('COMPLETE')
     except Exception as e:
         error = traceback.format_exc()
