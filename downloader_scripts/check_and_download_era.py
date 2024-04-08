@@ -164,17 +164,30 @@ def download_era5() -> None:
         return
 
     print('converting to daily cumulative')
-    for downloaded_file in downloaded_files:
-        daily_cumulative_file_name = os.path.basename(downloaded_file).replace('.nc', '_daily_cumulative.nc')
-        with xr.open_dataset(downloaded_file) as ds:
-            print(f'processing {downloaded_file}')
+    year_1 = year_month_combos[0][0]
+    month_1 = year_month_combos[0][1]
+    if len(year_month_combos) > 1:
+        year_2 = year_month_combos[1][0]
+        month_2 = year_month_combos[1][1]
+    else:
+        year_2 = year_1
+        month_2 = month_1
+    day_1 = min({d.day for d in date_range if d.year == year_1 and d.month == month_1})
+    day_2 = max({d.day for d in date_range if d.year == year_2 and d.month == month_2})
+    daily_cumulative_file_name = f'era5_{year_1}{str(month_1).zfill(2)}{str(day_1).zfill(2)}-{year}{str(month_2).zfill(2)}{str(day_2).zfill(2)}_daily_cumulative.nc'
+    with xr.open_mfdataset(downloaded_files,
+                           concat_dim='time', 
+                           combine='nested', 
+                           parallel=True, 
+                           chunks = {'time':'auto', 'lat':'auto','lon':'auto'}, # Included to prevent weird slicing behavior and missing data
+                           ) as ds:
+        print(f'processing {", ".join(downloaded_files)}')
 
-            if ds['time'].shape[0] == 0:
-                print(f'No time steps were downloaded- the shape of the time array is 0.')
-                print(f'Removing {downloaded_file}')
-                os.remove(downloaded_file)
-                continue
-
+        if ds['time'].shape[0] == 0:
+            print(f'No time steps were downloaded- the shape of the time array is 0.')
+            print(f'Removing {", ".join(downloaded_files)}')
+            {os.remove(downloaded_file) for downloaded_file in downloaded_files}
+        else:
             if 'expver' in ds.dims:
                 print('expver in dims')
                 # find the time steps where the runoff is not nan when expver=1
@@ -211,10 +224,10 @@ def download_era5() -> None:
             ds.to_netcdf(os.path.join(era_dir, daily_cumulative_file_name))
             print(f'uploading {daily_cumulative_file_name}')
             subprocess.call(['aws', 's3', 'cp', os.path.join(era_dir, daily_cumulative_file_name),
-                             os.path.join(s3_era_bucket, os.path.basename(downloaded_file))])
+                                os.path.join(s3_era_bucket, os.path.basename(daily_cumulative_file_name))])
 
-            # remove the original file
-            os.remove(downloaded_file)
+            # remove the original files
+            {os.remove(downloaded_file) for downloaded_file in downloaded_files}
 
             # remove the consolidated file
             os.remove(os.path.join(era_dir, daily_cumulative_file_name))
