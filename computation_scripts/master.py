@@ -317,9 +317,9 @@ def sync_local_to_s3() -> None:
         if not result.returncode == 0:
             raise Exception(f"Sync failed. Error: {result.stderr}")
 
-    # all . files in the top folder (.zgroup, .zmetadata), and all . files in the Qout var n(.zarray)
+    # all . files in the top folder (.zgroup, .zmetadata), and all . files in subfolders (.zarray)
     logging.info('Syncing zarr file root level . files to S3')
-    for f in glob.glob(os.path.join(local_zarr, '.*')):
+    for f in glob.glob(os.path.join(local_zarr, '.*')) + glob.glob(os.path.join(local_zarr, '*', '.*')):
         result = subprocess.run(
             f"s5cmd "
             f"--credentials-file {ODP_CREDENTIALS_FILE} --profile odp "
@@ -471,6 +471,45 @@ def run_rapid():
     logging.info(rapid_result.stdout)
     return
 
+def verify_era5_data():
+    """
+    Verifies that the ERA5 data is compatible with the retrospective zarr
+    """
+    runoff_files = glob.glob(os.path.join(runoff_dir, '*.nc'))
+    if not runoff_files:
+        CL.log_message('FAIL', 'No runoff files found')
+        exit()
+    with xr.open_mfdataset(runoff_files) as ds , xr.open_zarr(local_zarr) as retro_ds:
+        # Check the the time dimension
+        ro_time = ds['time'].values
+        retro_time = retro_ds['time'].values
+        total_time = np.concatenate((retro_time, ro_time))
+        difs = np.diff(total_time)
+        if not np.all(difs == difs[0]):
+            CL.log_message('FAIL', 'Time dimension of ERA5 is not compatible with the retrospective zarr')
+            exit()
+
+        # Check that there are no nans
+        if np.isnan(ds['ro'].values).any():
+            CL.log_message('FAIL', 'ERA5 data contains nans')
+            exit()
+
+def verify_concatenated_outputs():
+    """
+    Verifies that the concatenated outputs are correct
+    """
+    with xr.open_zarr(local_zarr) as ds:
+        # Test a river to see if there are nans
+        if np.isnan(ds.isel(rivid=1000)['Qout'].values).any():
+            CL.log_message('FAIL', 'Local zarr contain nans')
+            exit()
+
+        # Verify that the time dimension is correct
+        times = ds['time'].values
+        if not np.all(np.diff(times) == times[1] - times[0]):
+            CL.log_message('FAIL', 'Time dimension of the local zarr is incorrect')
+            exit()
+
 
 def delete_runoff_from_s3():
     """
@@ -508,6 +547,10 @@ if __name__ == '__main__':
         print('Fetching staged daily cumulative era5 runoff netcdfs')
         fetch_staged_era5()
 
+        CL.log_message('RUNNING', 'verifying era5 data is compatible with the retrospective zarr')
+        print('Verifying era5 data is compatible with the retrospective zarr')
+        verify_era5_data()
+
         CL.log_message('RUNNING', 'preparing inflows and namelists')
         print('Preparing inflows and namelists')
         inflow_and_namelist()
@@ -519,6 +562,10 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'concatenating outputs')
         print('Concatenating outputs')
         concatenate_outputs()
+
+        CL.log_message('RUNNING', 'checking local zarr is good to go')
+        print('Checking local zarr is good to go')
+        verify_concatenated_outputs()
 
         CL.log_message('RUNNING', 'caching Qout, Qfinal, and Zarr to S3')
         print('Caching Qout, Qfinal, and Zarr to S3')
