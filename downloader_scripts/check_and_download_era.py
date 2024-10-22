@@ -167,8 +167,8 @@ def download_era5() -> None:
     year_1 = year_month_combos[0][0]
     month_1 = year_month_combos[0][1]
     if len(year_month_combos) > 1:
-        year_2 = year_month_combos[1][0]
-        month_2 = year_month_combos[1][1]
+        year_2 = year_month_combos[-1][0]
+        month_2 = year_month_combos[-1][1]
     else:
         year_2 = year_1
         month_2 = month_1
@@ -262,7 +262,7 @@ def retrieve_data(client: cdsapi.Client,
         f'reanalysis-era5-single-levels',
         {
             'product_type': 'reanalysis',
-            'format': 'netcdf',
+            'data_format': 'netcdf',
             'variable': 'runoff',
             'year': year,
             'month': str(month).zfill(2),
@@ -275,7 +275,7 @@ def retrieve_data(client: cdsapi.Client,
 
 if __name__ == "__main__":
     """
-    We assume the the volume already has a file system and data (the treospective zarr)
+    We assume the the volume already has a file system and data (the retrospective zarr)
     """
     try:
         print('Starting')
