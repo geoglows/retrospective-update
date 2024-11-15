@@ -33,7 +33,8 @@ s3_era_bucket = os.getenv('S3_ERA_BUCKET')  # Directory containing the ERA5 data
 local_zarr = os.path.join(volume_directory, os.getenv('LOCAL_ZARR_NAME'))  # Local zarr to append to
 
 # set some file paths relative to HOME
-HOME = os.getcwd()
+#HOME = os.getcwd()
+HOME = '/home/ubuntu'
 configs_dir = os.path.join(HOME, 'data', 'configs')
 inflows_dir = os.path.join(HOME, 'data', 'inflows')
 runoff_dir = os.path.join(HOME, 'data', 'era5_runoff')
@@ -319,7 +320,7 @@ def sync_local_to_s3() -> None:
 
     # all . files in the top folder (.zgroup, .zmetadata), and all . files in the Qout var n(.zarray)
     logging.info('Syncing zarr file root level . files to S3')
-    for f in glob.glob(os.path.join(local_zarr, '.*')):
+    for f in glob.glob(os.path.join(local_zarr, '.*'))  + glob.glob(os.path.join(local_zarr, '*', '.*')):
         result = subprocess.run(
             f"s5cmd "
             f"--credentials-file {ODP_CREDENTIALS_FILE} --profile odp "
@@ -413,27 +414,27 @@ def concatenate_outputs() -> None:
     if not qouts:
         raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
 
-    unique_start_dates = sorted({os.path.basename(f).split('_')[2] for f in qouts})
-
-    for unique_start_date in unique_start_dates:
-        with xr.open_zarr(local_zarr) as retro_ds:
-            chunks = retro_ds.chunks
-            with xr.open_mfdataset(
-                    [qout for qout in qouts if unique_start_date in qout],
-                    combine='nested',
-                    concat_dim='rivid',
-                    preprocess=drop_coords
-            ).reindex(rivid=retro_ds['rivid']) as new_ds:
-                earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
-                latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
-                CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
-                logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
-                (
-                    new_ds
-                    .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
-                    .to_zarr(local_zarr, mode='a', append_dim='time', consolidated=True)
-                )
-                logging.info(f'Finished appending')
+    with xr.open_zarr(local_zarr) as retro_ds:
+        chunks = retro_ds.chunks
+        with xr.open_mfdataset(
+                qouts,
+                combine='nested',
+                concat_dim='rivid',
+                parallel=True,
+                preprocess=drop_coords
+        ).reindex(rivid=retro_ds['rivid']) as new_ds:
+            earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
+            latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
+            new_ds = new_ds.round(decimals=3)
+            new_ds = new_ds.where(new_ds['Qout'] >= 0.0, 0.0)
+            CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
+            logging.info(f'Appending to zarr: {earliest_date} to {latest_date}')
+            (
+                new_ds
+                .chunk({"time": chunks["time"][0], "rivid": chunks["rivid"][0]})
+                .to_zarr(local_zarr, mode='a', append_dim='time', consolidated=True)
+            )
+            logging.info(f'Finished appending')
     return
 
 
@@ -483,6 +484,46 @@ def delete_runoff_from_s3():
         s3.rm(f)
     return
 
+def verify_era5_data():
+    """
+    Verifies that the ERA5 data is compatible with the retrospective zarr
+    """
+    # todo
+    runoff_files = glob.glob(os.path.join(runoff_dir, '*.nc'))
+    if not runoff_files:
+        CL.log_message('FAIL', 'No runoff files found')
+        exit()
+    with xr.open_mfdataset(runoff_files) as ds , xr.open_zarr(local_zarr) as retro_ds:
+        # Check the the time dimension
+        ro_time = ds['time'].values
+        retro_time = retro_ds['time'].values
+        total_time = np.concatenate((retro_time, ro_time))
+        difs = np.diff(total_time)
+        if not np.all(difs == difs[0]):
+            CL.log_message('FAIL', 'Time dimension of ERA5 is not compatible with the retrospective zarr')
+            exit()
+
+        # Check that there are no nans
+        if np.isnan(ds['ro'].values).any():
+            CL.log_message('FAIL', 'ERA5 data contains nans')
+            exit()
+
+def verify_concatenated_outputs():
+    """
+    Verifies that the concatenated outputs are correct
+    """
+    with xr.open_zarr(local_zarr) as ds:
+        # Test a river to see if there are nans
+        if np.isnan(ds.isel(rivid=1000)['Qout'].values).any():
+            CL.log_message('FAIL', 'Local zarr contain nans')
+            exit()
+
+        # Verify that the time dimension is correct
+        times = ds['time'].values
+        if not np.all(np.diff(times) == times[1] - times[0]):
+            CL.log_message('FAIL', 'Time dimension of the local zarr is incorrect')
+            exit()
+
 
 if __name__ == '__main__':
     try:
@@ -508,6 +549,10 @@ if __name__ == '__main__':
         print('Fetching staged daily cumulative era5 runoff netcdfs')
         fetch_staged_era5()
 
+        CL.log_message('RUNNING', 'verifying era5 data is compatible with the retrospective zarr')
+        print('Verifying era5 data is compatible with the retrospective zarr')
+        verify_era5_data()
+
         CL.log_message('RUNNING', 'preparing inflows and namelists')
         print('Preparing inflows and namelists')
         inflow_and_namelist()
@@ -519,6 +564,10 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'concatenating outputs')
         print('Concatenating outputs')
         concatenate_outputs()
+
+        CL.log_message('RUNNING', 'checking local zarr is good to go')
+        print('Checking local zarr is good to go')
+        verify_concatenated_outputs()
 
         CL.log_message('RUNNING', 'caching Qout, Qfinal, and Zarr to S3')
         print('Caching Qout, Qfinal, and Zarr to S3')
