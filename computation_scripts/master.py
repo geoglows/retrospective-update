@@ -11,10 +11,9 @@ import numpy as np
 import psutil
 import s3fs
 import xarray as xr
+import river_route as rr
 
 from cloud_logger import CloudLog
-from generate_namelist import rapid_namelist_from_directories
-from inflow import create_inflow_file
 
 GEOGLOWS_ODP_RETROSPECTIVE_BUCKET = 's3://geoglows-v2-retrospective'
 GEOGLOWS_ODP_RETROSPECTIVE_ZARR = 'retrospective.zarr'
@@ -38,7 +37,6 @@ configs_dir = os.path.join(HOME, 'data', 'configs')
 inflows_dir = os.path.join(HOME, 'data', 'inflows')
 runoff_dir = os.path.join(HOME, 'data', 'era5_runoff')
 outputs_dir = os.path.join(HOME, 'data', 'outputs')
-namelists_dir = os.path.join(HOME, 'data', 'namelists')
 
 # create the required directory structure
 os.makedirs(configs_dir, exist_ok=True)
@@ -46,7 +44,6 @@ os.makedirs(runoff_dir, exist_ok=True)
 for d in glob.glob(os.path.join(configs_dir, '*')):
     os.makedirs(os.path.join(inflows_dir, os.path.basename(d)), exist_ok=True)
     os.makedirs(os.path.join(outputs_dir, os.path.basename(d)), exist_ok=True)
-    os.makedirs(os.path.join(namelists_dir, os.path.basename(d)), exist_ok=True)
 
 # Set up logging
 logging.basicConfig(
@@ -62,41 +59,17 @@ def _make_inflow_for_vpu(vpu: str) -> None:
     inflow_dir = os.path.join(inflows_dir, vpu)
 
     for runoff_file in glob.glob(os.path.join(runoff_dir, '*.nc')):
-        create_inflow_file(
-            runoff_file,
-            vpu_dir,
-            inflow_dir,
-            vpu_name=vpu,
-        )
+        weight_table = glob.glob(os.path.join(vpu_dir, 'weight_xinit=-179.5*.parquet'))[0]
+        params_file = glob.glob(os.path.join(vpu_dir, 'routing_parameters.parquet'))[0]
+
+        df = rr.runoff.calc_catchment_volumes(runoff_file,
+                                              weight_table,
+                                              params_file,)
+        rr.runoff.write_catchment_volumes(df, inflow_dir, vpu)
+
     return
 
-
-def _make_namelists_for_vpu(vpu: str) -> None:
-    vpu_dir = os.path.join(configs_dir, vpu)
-    inflow_dir = os.path.join(inflows_dir, vpu)
-    namelist_dir = os.path.join(namelists_dir, vpu)
-    output_dir = os.path.join(outputs_dir, vpu)
-    qfinal_file = natsort.natsorted(glob.glob(os.path.join(output_dir, 'Qfinal*.nc')))[-1]
-
-    for inflow_file in natsort.natsorted(glob.glob(os.path.join(inflow_dir, 'm3*.nc'))):
-        qfinal_file = rapid_namelist_from_directories(
-            vpu_dir,
-            inflow_file,
-            namelist_dir,
-            output_dir,
-            qinit_file=qfinal_file
-        )
-
-    for namelist in glob.glob(os.path.join(namelist_dir, f'namelist*')):
-        # Correct the paths in the namelist file
-        with open(namelist, 'r') as f:
-            text = f.read().replace(os.path.join(HOME, 'data'), '/mnt')
-        with open(namelist, 'w') as f:
-            f.write(text)
-    return
-
-
-def inflow_and_namelist() -> None:
+def inflows() -> None:
     # For inflows files and multiprocess, for each 1GB of runoff data, we need ~ 6GB for peak memory consumption.
     # Otherwise, some m3 files will never be written and no error is raised
     sample_runoff_file = glob.glob(os.path.join(runoff_dir, '*.nc'))[0]
@@ -104,12 +77,12 @@ def inflow_and_namelist() -> None:
         os.cpu_count(),
         round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(sample_runoff_file) * 6))
     )
+
     logging.info(f"Using {processes} processes for inflows")
     vpu_numbers = [os.path.basename(d) for d in glob.glob(os.path.join(configs_dir, '*'))]
     logging.info(vpu_numbers)
     with Pool(processes) as p:
         p.map(_make_inflow_for_vpu, vpu_numbers)
-        p.map(_make_namelists_for_vpu, vpu_numbers)
 
     # number of expected files = num_configs_dirs * num_runoff_files
     expected_file_count = len(glob.glob(os.path.join(configs_dir, '*'))) * len(
@@ -118,9 +91,6 @@ def inflow_and_namelist() -> None:
     # check that all inflow files were created correctly
     if not len(glob.glob(os.path.join(inflows_dir, '*', '*.nc'))) == expected_file_count:
         raise FileNotFoundError("Not all inflow files were created correctly")
-    # check that all namelists were created correctly
-    if not len(glob.glob(os.path.join(namelists_dir, '*', 'namelist*'))) == expected_file_count:
-        raise FileNotFoundError("Not all namelists were created correctly")
 
     return
 
@@ -147,7 +117,7 @@ def get_qinits_from_s3() -> None:
     #
     # latest_s3_qfinals_per_vpu = [
     #     natsort.natsorted(s3.glob(f'{s3_qfinal_dir}/{os.path.basename(vpu)}/Qfinal*.nc'))[-1] for vpu in
-    #     glob.glob(os.path.join(HOME, 'data', 'configs', '*'))
+    #     glob.glob(os.path.join(configs_dir, '*'))
     # ]
     #
     # # check that all qfinal dates are the same
@@ -158,10 +128,10 @@ def get_qinits_from_s3() -> None:
     #     raise FileNotFoundError(f"Most recent Qfinal date doesn't match last date in zarr ({last_retro_time})")
 
     # download the qfinal files
-    for vpu in glob.glob(os.path.join(HOME, 'data', 'configs', '*')):
+    for vpu in glob.glob(os.path.join(configs_dir, '*')):
         vpu = os.path.basename(vpu)
         most_recent_qfinal = natsort.natsorted(s3.glob(f'{s3_qfinal_dir}/{vpu}/Qfinal*.nc'))[-1]
-        local_file_name = os.path.join(HOME, 'data', 'outputs', vpu, os.path.basename(most_recent_qfinal))
+        local_file_name = os.path.join(outputs_dir, vpu, os.path.basename(most_recent_qfinal))
         if not os.path.exists(local_file_name):
             s3.get(most_recent_qfinal, local_file_name)
     return
@@ -179,7 +149,7 @@ def cache_to_s3(s3: s3fs.S3FileSystem,
         delete_all (bool, optional): If True, deletes all qfinal files. Defaults to False.
     """
 
-    vpu_dirs = glob.glob(os.path.join(HOME, 'data', 'outputs', '*'))
+    vpu_dirs = glob.glob(os.path.join(outputs_dir, '*'))
     for vpu_dir in vpu_dirs:
         # Delete the earliest qfinal, upload the latest qfinal
         qfinals = [f for f in glob.glob(os.path.join(vpu_dir, 'Qfinal*.nc'))]
@@ -241,11 +211,6 @@ def cleanup() -> None:
     """
     # change the owner of the data directory and all sub files and directories to the ubuntu user
     os.system(f'sudo chown -R ubuntu:ubuntu {HOME}/data')
-
-    # Delete namelists
-    logging.info('Deleting namelists')
-    for file in glob.glob(os.path.join(namelists_dir, '*', '*')):
-        os.remove(file)
 
     # delete runoff data
     logging.info('Deleting runoff data')
@@ -363,15 +328,30 @@ def setup_configs() -> None:
     """
     Setup all the directories we need, populate files
     """
-    c_dir = os.path.join(HOME, 'data', 'configs')
-    os.makedirs(c_dir, exist_ok=True)
-    if len(glob.glob(os.path.join(c_dir, '*', '*.csv'))) == 0:
-        result = subprocess.run(f"aws s3 sync {GEOGLOWS_ODP_CONFIGS} {c_dir}", shell=True, capture_output=True,
+    os.makedirs(configs_dir, exist_ok=True)
+    if len(glob.glob(os.path.join(configs_dir, '*', '*.csv'))) == 0:
+        result = subprocess.run(f"aws s3 sync {GEOGLOWS_ODP_CONFIGS} {configs_dir}", shell=True, capture_output=True,
                                 text=True)
         if result.returncode == 0:
             logging.info("Obtained config files")
         else:
             logging.error(f"Config file sync error: {result.stderr}")
+            CL.log_message('FAIL', f"Config file sync error: {result.stderr}")
+            exit()
+
+    if len(glob.glob(os.path.join(configs_dir, '*', '*.parquet'))) == 0:
+        # We will convert CSVs to river-route parquets
+        vpu_dirs = glob.glob(os.path.join(configs_dir, '*'))
+        for vpu_dir in vpu_dirs:
+            riv_bas_id = os.path.join(vpu_dir, 'riv_bas_id.csv')
+            k_csv = os.path.join(vpu_dir, 'k.csv')
+            x_csv = os.path.join(vpu_dir, 'x.csv')
+            rapid_connect_csv = os.path.join(vpu_dir, 'rapid_connect.csv')
+
+            out_params = os.path.join(vpu_dir, 'routing_parameters.parquet')
+            out_connectivity = os.path.join(vpu_dir, 'connectivity.parquet')
+
+            rr.tools.routing_files_from_RAPID(riv_bas_id, k_csv, x_csv, rapid_connect_csv, out_params, out_connectivity)
 
 
 def _check_installations() -> None:
@@ -391,25 +371,14 @@ def _check_installations() -> None:
     except Exception as e:
         raise RuntimeError('Please install s5cmd: `conda install -c conda-forge s5cmd`')
 
-    try:
-        subprocess.run(['docker', '--version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except Exception as e:
-        raise RuntimeError('Please install docker, and run "docker pull chdavid/rapid"')
-
     if not os.path.exists(local_zarr):
         logging.error(f"{local_zarr} does not exist!")
         CL.log_message('FAIL', f"{local_zarr} does not exist!")
         exit()
-    if not os.path.exists(os.path.join(HOME, 'data', 'runrapid.py')):
-        msg = f"Please put 'runrapid.py' in {HOME}/data so that RAPID may use it"
-        logging.error(msg)
-        CL.log_message('FAIL', msg)
-        exit()
-
 
 def concatenate_outputs() -> None:
     # Build the week dataset
-    qouts = natsort.natsorted(glob.glob(os.path.join(HOME, 'data', 'outputs', '*', 'Qout*.nc')))
+    qouts = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')))
     if not qouts:
         raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
 
@@ -452,23 +421,38 @@ def fetch_staged_era5():
     os.system(f'aws s3 cp {s3_era_bucket} {runoff_dir} --recursive --include "*"')
     return
 
+def _run_river_route(vpu_dir: str):
+    params_file = glob.glob(os.path.join(vpu_dir, 'routing_parameters.parquet'))[0]
+    connectivity_file = glob.glob(os.path.join(vpu_dir, 'connectivity.parquet'))[0]
+    output_dir = os.path.join(outputs_dir, os.path.basename(vpu_dir))
 
-def run_rapid():
-    # Run rapid
+    for catchment_volumes_file in natsort.natsorted(glob.glob(os.path.join(inflows_dir, os.path.basename(vpu_dir), '*.nc'))):
+        outflow_file = os.path.join(output_dir, os.path.basename(catchment_volumes_file).replace('volumes', 'Qout'))
+        initial_state_file = natsort.natsorted(glob.glob(os.path.join(output_dir, 'Qfinal*.nc')))[-1]
+        final_state_file = outflow_file.replace('Qout', 'Qfinal')
+        (
+            rr
+            .Muskingum(
+                routing_params_file = params_file,
+                connectivity_file = connectivity_file,
+                catchment_volumes_file = catchment_volumes_file,
+                outflow_file = outflow_file,
+                initial_state_file = initial_state_file,
+                final_state_file = final_state_file,
+                progress_bar = False,
+            )
+            .route()
+        )
+
+def run_river_route():
     logging.info('Running rapid')
-    CL.log_message('RUNNING', 'Running RAPID')
-    rapid_result = subprocess.run(
-        [
-            f'sudo docker run --rm --name rapid --mount type=bind,source={os.path.join(HOME, "data")},target=/mnt chdavid/rapid python3 /mnt/runrapid.py'],
-        shell=True,
-        capture_output=True,
-        text=True
-    )
+    CL.log_message('RUNNING', 'Running river-route')
+    
+    with Pool(os.cpu_count()) as p:
+        p.apply_async(_run_river_route, glob.glob(os.path.join(configs_dir, '*')))
+        p.close()
+        p.join()
 
-    if rapid_result.returncode != 0:
-        raise RuntimeError(rapid_result.stderr)
-
-    logging.info(rapid_result.stdout)
     return
 
 def verify_era5_data():
@@ -531,6 +515,9 @@ if __name__ == '__main__':
         print('Checking installations and environment')
         _check_installations()
 
+        CL.log_message('RUNNING', 'Verifying zarr on s3 matches local zarr')
+        # todo
+
         CL.log_message('RUNNING', 'preparing config files')
         print('Preparing config files')
         setup_configs()
@@ -551,13 +538,13 @@ if __name__ == '__main__':
         print('Verifying era5 data is compatible with the retrospective zarr')
         verify_era5_data()
 
-        CL.log_message('RUNNING', 'preparing inflows and namelists')
-        print('Preparing inflows and namelists')
-        inflow_and_namelist()
+        CL.log_message('RUNNING', 'preparing inflows')
+        print('Preparing inflows')
+        inflows()
 
-        CL.log_message('RUNNING', 'Running RAPID')
-        print('Running RAPID')
-        run_rapid()
+        CL.log_message('RUNNING', 'Running river-route')
+        print('Running river-route')
+        run_river_route()
 
         CL.log_message('RUNNING', 'concatenating outputs')
         print('Concatenating outputs')
@@ -570,9 +557,6 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'caching Qout, Qfinal, and Zarr to S3')
         print('Caching Qout, Qfinal, and Zarr to S3')
         sync_local_to_s3()
-
-        CL.log_message('RUNNING', 'Verifying zarr on s3 matches local zarr')
-        # todo
 
         CL.log_message('RUNNING', 'Deleting runoff from s3')
         print('Deleting runoff from s3')
