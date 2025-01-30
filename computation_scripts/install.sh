@@ -23,9 +23,3 @@ conda env create -f $ENVIRONMENT_FILE -n $ENVIRONMENT_NAME
 echo "Activating conda environment..."
 conda activate $ENVIRONMENT_NAME
 
-# Install docker
-echo "Downloading and installing Docker..."
-sudo apt-get install -y docker.io
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo docker pull chdavid/rapid

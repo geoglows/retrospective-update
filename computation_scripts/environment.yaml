@@ -27,3 +27,5 @@ dependencies:
   - xarray
   - zarr
   - natsort
+  -pip:
+    - river-route
