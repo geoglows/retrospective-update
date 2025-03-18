@@ -1,5 +1,5 @@
 # retrospective-update
-Using two EC2 instances, download ERA5 data on one, and use that data on the other to run RAPID and append the output data to a zarr file on an Amazon S3 bucket.
+Workflow to download ECMWF runoff data, route it using [river-route](https://river-route.hales.app/en/latest/), and append and upload to the GEOGLOWS AWS bucket. 
 
 ## Setup
 ### Create your EC2 Role
@@ -19,7 +19,7 @@ Using two EC2 instances, download ERA5 data on one, and use that data on the oth
 ### Setup CloudWatch
 1. Go to the AWS Cloudwatch service page and select "Log groups" in the navigation pane. Click "Create log group" in the top right corner.
 2. Edit your group settings as you desire and click "Create".
-3. With your new log group, click the "Create log stream" button. Give it a name. You may make multiple log streams for each EC2 instance. You will need to remember the group name and stream name when filling out the .profile files for each instance.
+3. With your new log group, click the "Create log stream" button. Give it a name. You will need to remember the group name and stream name when filling out the .profile file.
 
 ### Launch the computation instance
 1. On the "Launch an instance" page, select a linux-based OS in "Application and OS Images (Amazon Machine Image)". 
