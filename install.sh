@@ -1,8 +1,8 @@
 #!/bin/bash
 
 MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
-ENVIRONMENT_FILE="retrospective-update/downloader_scripts/environment.yaml"
-ENVIRONMENT_NAME="download"
+ENVIRONMENT_FILE="retrospective-update/environment.yaml"
+ENVIRONMENT_NAME="update"
 
 sudo apt-get update
 
@@ -22,3 +22,4 @@ conda env create -f $ENVIRONMENT_FILE -n $ENVIRONMENT_NAME
 # Activate the conda environment
 echo "Activating conda environment..."
 conda activate $ENVIRONMENT_NAME
+

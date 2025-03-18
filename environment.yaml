@@ -1,31 +1,31 @@
-name: add_week
+name: update
 channels:
   - conda-forge
   - defaults
 dependencies:
   - awscli
-  - libgcc-ng
-  - python>=3.8
-  - s5cmd
-  - aiobotocore
   - boto3
-  - cftime
+  - cdsapi>=0.7.4
   - dask
   - distributed
+  - fastparquet
   - flox
   - h5netcdf
-  - h5py
+  - matplotlib
   - natsort
   - netcdf4
-  - numpy
+  - networkx
   - pandas
+  - pip
   - psutil
-  - rechunker
+  - pyyaml
+  - python
   - requests
   - s3fs
+  - s5cmd
   - scipy
+  - tqdm
   - xarray
-  - zarr
-  - natsort
-  -pip:
-    - river-route
+  - zarr=2
+  - pip:
+    - river-route>=1.2.1

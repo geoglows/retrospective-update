@@ -7,11 +7,21 @@ import logging
 import boto3
 import numpy as np
 
-LOG_GROUP_NAME = os.getenv('AWS_LOG_GROUP_NAME')
-LOG_STREAM_NAME = os.getenv('AWS_LOG_STREAM_NAME')
-ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-REGION = os.getenv('REGION_NAME')
+
+
+if False:
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        filename=f'log.log',
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        filemode='w',  # Overwrite the log file each time
+    )
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+    )
 
 
 class CloudLog():
@@ -38,11 +48,16 @@ class CloudLog():
     """
 
     def __init__(self,
-                 ACCESS_KEY_ID=ACCESS_KEY_ID,
-                 SECRET_ACCESS_KEY=SECRET_ACCESS_KEY,
-                 REGION=REGION,
+                 LOG_GROUP_NAME: str,
+                 LOG_STREAM_NAME: str,
+                 ACCESS_KEY_ID: str,
+                 SECRET_ACCESS_KEY: str,
+                 REGION: str,
                  save_path: str = 'log.json',
                  ):
+        self.LOG_GROUP_NAME = LOG_GROUP_NAME
+        self.LOG_STREAM_NAME = LOG_STREAM_NAME
+
         self.save_path = save_path
         self.start = datetime.datetime.now().ctime()
         self.last_date = None
@@ -136,8 +151,6 @@ class CloudLog():
         Returns:
             dict: The response from the CloudWatch API.
         """
-        global LOG_GROUP_NAME
-        global LOG_STREAM_NAME
         if message is not None:
             self.message = message
         log_message = {
@@ -149,12 +162,13 @@ class CloudLog():
             'Qinit used': self.qinit,
             'Time period': self.time_period
         }
+        logging.info(self.message)
 
         # Send the log message to CloudWatch
         try:
             response = self.client.put_log_events(
-                logGroupName=LOG_GROUP_NAME,
-                logStreamName=LOG_STREAM_NAME,
+                logGroupName=self.LOG_GROUP_NAME,
+                logStreamName=self.LOG_STREAM_NAME,
                 logEvents=[
                     {
                         'timestamp': int(round(time.time() * 1000)),
@@ -164,4 +178,4 @@ class CloudLog():
             )
             return response
         except Exception as e:
-            logging.error(e)
+            pass
