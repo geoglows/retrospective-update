@@ -38,8 +38,8 @@ cd $HOME
 sudo apt-get update
 sudo apt-get install git
 git clone https://github.com/geoglows/retrospective-update.git
-sudo chmod +x retrospective-update/retrospective-update/install.sh
-source retrospective-update/retrospective-update/install.sh
+sudo chmod +x retrospective-update/install.sh
+source retrospective-update/install.sh
 ```
 3. Create a 1000GB volume (read how to do that [here](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-creating-volume.html)). Setup the instance to automatically attatch that volume on each startup (instructions under "Automatically mount an attached volume after reboot" [here](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ebs-using-volumes.html)). Remember the mount location you choose (we recommend simply using "/mnt"). Attach the volume.
 4. Add a copy of the retrospective zarr to the volume. 
