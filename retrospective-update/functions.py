@@ -382,6 +382,7 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
         vpu = os.path.basename(vpu)
         most_recent_qfinal = natsort.natsorted(s3.ls(f'{s3_qfinal_dir}/{vpu}/'))[-1]
         local_file_name = os.path.join(outputs_dir, vpu, os.path.basename(most_recent_qfinal))
+        local_file_name = local_file_name.replace('00.', '.')
         if not os.path.exists(local_file_name):
             s3.get(most_recent_qfinal, local_file_name)
     return
