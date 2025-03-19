@@ -107,7 +107,7 @@ def download_era5(era_dir: str,
         month_2 = month_1
     day_1 = min({d.day for d in date_range if d.year == year_1 and d.month == month_1})
     day_2 = max({d.day for d in date_range if d.year == year_2 and d.month == month_2})
-    hourly_cumulative_file_name = f'era5_{year_1}{str(month_1).zfill(2)}{str(day_1).zfill(2)}-{year}{str(month_2).zfill(2)}{str(day_2).zfill(2)}_daily_cumulative.nc'
+    hourly_cumulative_file_name = f'era5_{year_1}{str(month_1).zfill(2)}{str(day_1).zfill(2)}-{year_2}{str(month_2).zfill(2)}{str(day_2).zfill(2)}_daily_cumulative.nc'
     hourly_cumulative_file_name = os.path.join(runoff_dir, hourly_cumulative_file_name)
 
     if os.path.exists(hourly_cumulative_file_name):
@@ -436,7 +436,7 @@ def processes(runoff_dir: str,) -> int:
     sample_runoff_file = glob.glob(os.path.join(runoff_dir, '*.nc'))[0]
     processes = max(
         1,
-        round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(sample_runoff_file) * 50))
+        round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(sample_runoff_file) * 25))
     )
     logging.info(f"Using {processes} processes")
     return processes

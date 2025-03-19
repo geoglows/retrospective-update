@@ -19,11 +19,11 @@ Content-Disposition: attachment; filename="userdata.txt"
 
 #!/bin/bash
 HOME=/home/ubuntu
-cd $HOME/retrospective-update/retrospective-update
+cd $HOME/retrospective-update
 eval $($HOME/miniconda3/bin/conda shell.bash hook)
 source $HOME/miniconda3/bin/activate update
-source ../.profile
-python master.py
+source .profile
+python retrospective-update/master.py
 sudo shutdown -h now
 
 --//--

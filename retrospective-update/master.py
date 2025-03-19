@@ -1,7 +1,7 @@
 import glob
 import os
 import traceback
-from multiprocessing import Pool
+from multiprocessing import Pool, set_start_method
 
 import s3fs
 import aiobotocore.session
@@ -20,6 +20,9 @@ LOG_STREAM_NAME = os.getenv('AWS_LOG_STREAM_NAME')
 ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 REGION = os.getenv('REGION_NAME')
+
+# Update cdsapirc file
+os.environ['CDSAPI_RC'] = os.path.expanduser(os.getenv('CDSAPI_RC'))
 
 # Parameters
 MIN_LAG_TIME_DAYS = int(os.getenv('MIN_LAG_TIME_DAYS', 5))
@@ -62,9 +65,6 @@ if __name__ == '__main__':
     try:
         CL.log_message('START')
 
-        CL.log_message('RUNNING', 'running cleanup on previous runs')
-        f.cleanup(HOME, runoff_dir, inflows_dir, outputs_dir, configs_dir)
-
         CL.log_message('RUNNING', 'Downloading ERA5 runoff data')
         f.download_era5(ERA_DIR, runoff_dir, S3_DAILY_ZARR, MIN_LAG_TIME_DAYS, CL)
 
@@ -84,7 +84,7 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'verifying era5 data is compatible with the retrospective zarr')
         f.verify_era5_data(runoff_dir, LOCAL_HOURLY_ZARR)
 
-        # set_start_method("spawn", force=True) # This avoids some issues I was seeing with multiprocessing (linux 'fork' was mystic...)
+        set_start_method("spawn", force=True) # This avoids some issues I was seeing with multiprocessing (linux 'fork' was mystic...)
         with Pool(f.processes(runoff_dir)) as p:
             CL.log_message('RUNNING', 'preparing inflows')
             f.inflows(runoff_dir, configs_dir, inflows_dir, p)
