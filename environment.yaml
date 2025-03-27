@@ -3,6 +3,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - aiobotocore
   - awscli
   - boto3
   - cdsapi>=0.7.4
