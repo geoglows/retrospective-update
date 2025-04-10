@@ -19,11 +19,11 @@ Content-Disposition: attachment; filename="userdata.txt"
 
 #!/bin/bash
 HOME=/home/ubuntu
-cd $HOME/retrospective-update/downloader_scripts
+cd $HOME/retrospective-update/retrospective-update
 eval $($HOME/miniconda3/bin/conda shell.bash hook)
-source $HOME/miniconda3/bin/activate download
+source $HOME/miniconda3/bin/activate add_week
 source ../.profile
-python check_and_download_era.py
+python master.py
 sudo shutdown -h now
 
 --//--
