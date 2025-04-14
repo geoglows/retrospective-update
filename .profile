@@ -1,11 +1,10 @@
 export MIN_LAG_TIME_DAYS=5 # Minimum number of days to wait before attempting data download
 
-# export VOLUME_DIR="/mnt"  # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
-export VOLUME_DIR="~/mnt" 
+export VOLUME_DIR="/mnt"  # The volume is mounted to this location upon each EC2 startup. To change, modify /etc/fstab
 
 export S3_DAILY_ZARR="s3://rfs-v2/retrospective/daily.zarr" # Zarr located on S3
 export S3_HOURLY_ZARR="s3://rfs-v2/retrospective/hourly.zarr" # Zarr located on S3
-export S3_QFINAL_DIR="s3://rfs-v2/finalstates" # Directory containing vpu subdirectories, containing Qfinal files
+export S3_QFINAL_DIR="s3://rfs-v2/retrospective/final-states" # Directory containing vpu subdirectories, containing Qfinal files
 export S3_CONFIGS_DIR="s3://rfs-v2/routing-configs" # Directory containing subdirectories, containing the files to run river route.
 
 export S3_MONTHLY_TIMESTEPS="s3://rfs-v2/retrospective/monthly-timesteps.zarr" # Zarr located on S3
