@@ -147,37 +147,47 @@ def download_era5(era_dir: str,
                 logging.info(f'No time steps were downloaded- the shape of the time array is 0.')
                 logging.info(f'Removing {", ".join(downloaded_files)}')
                 {os.remove(downloaded_file) for downloaded_file in downloaded_files}
-            else:
-                if 'expver' in ds.dims:
-                    logging.info('expver in dims')
-                    # find the time steps where the runoff is not nan when expver=1
-                    a = ds.ro.sel(latitude=0, longitude=0, expver=1)
-                    expver1_timesteps = a.time[~np.isnan(a)]
+                continue
+            
+            if 'expver' in ds.dims:
+                logging.info('expver in dims')
+                # find the time steps where the runoff is not nan when expver=1
+                a = ds.ro.sel(latitude=0, longitude=0, expver=1)
+                expver1_timesteps = a.time[~np.isnan(a)]
 
-                    # find the time steps where the runoff is not nan when expver=5
-                    b = ds.ro.sel(latitude=0, longitude=0, expver=5)
-                    expver5_timesteps = b.time[~np.isnan(b)]
+                # find the time steps where the runoff is not nan when expver=5
+                b = ds.ro.sel(latitude=0, longitude=0, expver=5)
+                expver5_timesteps = b.time[~np.isnan(b)]
 
-                    # assert that the two timesteps combined are the same as the original
-                    assert len(ds.time) == len(expver1_timesteps) + len(expver5_timesteps)
+                # assert that the two timesteps combined are the same as the original
+                assert len(ds.time) == len(expver1_timesteps) + len(expver5_timesteps)
 
-                    # combine the two
-                    ds = (
-                        xr
-                        .concat(
-                            [
-                                ds.sel(expver=1, time=expver1_timesteps.values).drop_vars('expver'),
-                                ds.sel(expver=5, time=expver5_timesteps.values).drop_vars('expver')
-                            ],
-                            dim='time'
-                        )
+                # combine the two
+                ds = (
+                    xr
+                    .concat(
+                        [
+                            ds.sel(expver=1, time=expver1_timesteps.values).drop_vars('expver'),
+                            ds.sel(expver=5, time=expver5_timesteps.values).drop_vars('expver')
+                        ],
+                        dim='time'
                     )
-                elif 'expver' in ds:
-                    # Sometimes this is just here not doing anything
-                    # Remove it to avoid warning when saving
-                    ds = ds.drop_vars('expver')
-                
-                ds.to_netcdf(output_file)
+                )
+            elif 'expver' in ds:
+                # Sometimes this is just here not doing anything
+                # Remove it to avoid warning when saving
+                ds = ds.drop_vars('expver')
+            
+            # Make sure that the last timestep is T23:00 (i.e., a full day)
+            if ds.time[-1].values != np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}T23:00'):
+                # Remove timesteps until the last full day
+                ds = ds.sel(time=slice(None, np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
+
+                # If there is no more time, skip this file
+                if len(ds.time) == 0:
+                    continue
+
+            ds.to_netcdf(output_file)
 
     # Now remove the downloaded files
     {os.remove(downloaded_file) for downloaded_file in downloaded_files}
@@ -592,6 +602,9 @@ def sync_local_to_s3(outputs_dir: str,
 
     # sync the zarrs. We can use sync because 0.* files are not is not on local side
     for zarr, s3_zarr in zip([local_hourly_zarr, local_daily_zarr], [s3_hourly_zarr, s3_daily_zarr]):
+    # for zarr, s3_zarr in zip([local_hourly_zarr], [s3_hourly_zarr]):
+        # files = glob.glob(os.path.join(zarr), 'Q', '*')
+        # chunks = sorted({os.path.basename(f).split('.')[0]  for f in files})
         CL.log_message('RUNNING', f'Syncing {zarr} to S3')
         result = subprocess.run(
             f"s5cmd "
@@ -684,7 +697,7 @@ def update_yearly_zarrs(hourly_zarr: str,
             .to_zarr(annual_maximums, mode='a', append_dim='time', consolidated=True, storage_options=storage_options)
         )
 
-def cleanup(home: str,
+def cleanup(data_dir: str,
             runoff_dir: str,
             inflows_dir: str,
             outputs_dir: str,) -> None:
@@ -693,7 +706,7 @@ def cleanup(home: str,
     caching qfinals and qouts.
     """
     # change the owner of the data directory and all sub files and directories to the user
-    os.system(f'sudo chown -R $USER:$USER {home}/data')
+    os.system(f'sudo chown -R $USER:$USER {data_dir}')
 
     # delete runoff data
     logging.info('Deleting runoff data')

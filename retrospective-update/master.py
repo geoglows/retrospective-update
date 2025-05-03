@@ -37,8 +37,7 @@ S3_ANNUAL_TIMESTEPS = os.getenv('S3_ANNUAL_TIMESTEPS')
 S3_ANNUAL_TIMESERIES = os.getenv('S3_ANNUAL_TIMESERIES')
 S3_ANNUAL_MAXIMUMS = os.getenv('S3_ANNUAL_MAXIMUMS')
 
-# set some file paths relative to HOME
-HOME = os.path.expanduser(os.getenv('HOMR', '~'))
+# set some file paths
 ERA_DIR = os.path.join(volume_directory, 'data', 'era5_data')
 CONFIGS_DIR = os.path.join(volume_directory, 'data', 'configs')
 INFLOWS_DIR = os.path.join(volume_directory, 'data', 'inflows')
@@ -103,7 +102,7 @@ if __name__ == '__main__':
         f.update_yearly_zarrs(LOCAL_HOURLY_ZARR, S3_ANNUAL_TIMESTEPS, S3_ANNUAL_TIMESERIES, S3_ANNUAL_MAXIMUMS)
 
         CL.log_message('RUNNING', 'cleaning up current run')
-        f.cleanup(HOME, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
+        f.cleanup(volume_directory, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
 
         CL.log_message('COMPLETE')
     except Exception as e:

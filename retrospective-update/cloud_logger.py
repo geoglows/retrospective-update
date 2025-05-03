@@ -1,25 +1,25 @@
 import datetime
 import json
-import os
+import sys
 import time
 import logging
 
 import boto3
 import numpy as np
 
-if False:
-    # Set up logging
-    logging.basicConfig(
-        level=logging.INFO,
-        filename=f'log.log',
-        format='%(asctime)s - %(levelname)s - %(message)s',
-        filemode='w',  # Overwrite the log file each time
-    )
-else:
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
-    )
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Formatter
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+file_handler = logging.FileHandler('log.log')
+file_handler.setFormatter(formatter)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 class CloudLog():
     """
