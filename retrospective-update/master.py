@@ -1,4 +1,5 @@
 import os
+import atexit
 import traceback
 import aiobotocore
 from multiprocessing import Pool, set_start_method
@@ -44,6 +45,9 @@ INFLOWS_DIR = os.path.join(volume_directory, 'data', 'inflows')
 RUNOFF_DIR = os.path.join(volume_directory, 'data', 'era5_runoff')
 OUTPUTS_DIR = os.path.join(volume_directory, 'data', 'outputs')
 
+# Cleanup no matter what
+atexit.register(f.cleanup, volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
+
 if __name__ == '__main__':
     try:
         CL = CloudLog(LOG_GROUP_NAME, LOG_STREAM_NAME, ACCESS_KEY_ID, SECRET_ACCESS_KEY, REGION)
@@ -56,7 +60,7 @@ if __name__ == '__main__':
         os.makedirs(OUTPUTS_DIR, exist_ok=True)
         os.makedirs(INFLOWS_DIR, exist_ok=True)
 
-        CL.log_message('START')
+        CL.ping('START', 'Starting-retrospective-update')
         f.download_era5(ERA_DIR, RUNOFF_DIR, S3_DAILY_ZARR, MIN_LAG_TIME_DAYS, CL)
 
         CL.log_message('RUNNING', 'checking installations and environment')
@@ -64,10 +68,10 @@ if __name__ == '__main__':
 
         CL.log_message('RUNNING', 'Verifying zarr on s3 matches local zarr')
         for z, s in zip([LOCAL_DAILY_ZARR, LOCAL_HOURLY_ZARR], [S3_DAILY_ZARR, S3_HOURLY_ZARR]):
-            f.check_zarrs_match(z, s)
+            f.check_zarrs_match(z, s, CL)
 
         CL.log_message('RUNNING', 'verifying era5 data is compatible with the retrospective zarr')
-        f.verify_era5_data(RUNOFF_DIR, LOCAL_HOURLY_ZARR)
+        f.verify_era5_data(RUNOFF_DIR, LOCAL_HOURLY_ZARR, CL)
 
         CL.log_message('RUNNING', 'preparing config files')
         f.setup_configs(CONFIGS_DIR, S3_CONFIGS_DIR, CL)
@@ -79,13 +83,13 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', f'preparing inflows and namelists with {num_processes} processes')
         set_start_method('spawn', force=True)
         with Pool(num_processes) as p:
-            CL.log_message('RUNNING', 'preparing inflows')
-            f.inflows(RUNOFF_DIR, CONFIGS_DIR, INFLOWS_DIR, p)
+            CL.ping('RUNNING', 'preparing-inflows')
+            f.inflows(RUNOFF_DIR, CONFIGS_DIR, INFLOWS_DIR, p, CL)
 
-            CL.log_message('RUNNING', 'Running river-route')
+            CL.ping('RUNNING', 'Running-river-route')
             f.run_river_route(CONFIGS_DIR, OUTPUTS_DIR, INFLOWS_DIR, p)
         
-        CL.log_message('RUNNING', 'concatenating outputs')
+        CL.ping('RUNNING', 'concatenating-outputs')
         f.concatenate_outputs(OUTPUTS_DIR, LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, CL)
 
         CL.log_message('RUNNING', 'checking local zarr is good to go')
@@ -96,15 +100,16 @@ if __name__ == '__main__':
         f.sync_local_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, ODP_CREDENTIALS_FILE, CL)
 
         CL.log_message('RUNNING', 'updating monthly zarrs')
-        f.update_monthly_zarrs(LOCAL_DAILY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES)
+        f.update_monthly_zarrs(LOCAL_DAILY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES, CL)
         
         CL.log_message('RUNNING', 'updating annual zarrs')
-        f.update_yearly_zarrs(LOCAL_HOURLY_ZARR, S3_ANNUAL_TIMESTEPS, S3_ANNUAL_TIMESERIES, S3_ANNUAL_MAXIMUMS)
+        f.update_yearly_zarrs(LOCAL_HOURLY_ZARR, S3_ANNUAL_TIMESTEPS, S3_ANNUAL_TIMESERIES, S3_ANNUAL_MAXIMUMS, CL)
 
-        CL.log_message('RUNNING', 'cleaning up current run')
-        f.cleanup(volume_directory, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
+        CL.ping('RUNNING', 'cleaning-up')
+        f.cleanup(volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
 
-        CL.log_message('COMPLETE')
+        CL.ping('COMPLETE', "Retrospective-update-complete")
     except Exception as e:
         error = traceback.format_exc()
+        CL.ping('FAIL', str(e))
         CL.log_message('FAIL', error)

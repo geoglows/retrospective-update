@@ -16,7 +16,8 @@ export S3_ANNUAL_MAXIMUMS="s3://geoglows-v2/retrospective/annual-maximums.zarr" 
 export LOCAL_DAILY_ZARR_NAME="daily.zarr" # Name of the Zarr file on the local machine
 export LOCAL_HOURLY_ZARR_NAME="hourly.zarr" # Name of the Zarr file on the local machine
 
+export ODP_CREDENTIALS_FILE="/home/ubuntu/.aws/credentials" # Path to the AWS credentials file
 export AWS_LOG_GROUP_NAME="retrospective-updater-logs" # AWS CloudWatch log group name
-export AWS_LOG_STREAM_NAME="retrospective-updater-log-stream" # AWS CloudWatch log stream name
+export AWS_LOG_STREAM_NAME="updater-logs-new" # AWS CloudWatch log stream name
 export REGION_NAME="us-east-1" # AWS region name
-export CDSAPI_RC="~/.cdsapirc" # Path to the CDS API key file
+export CDSAPI_RC="/home/ubuntu/.cdsapirc" # Path to the CDS API key file

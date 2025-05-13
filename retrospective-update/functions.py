@@ -78,8 +78,8 @@ def download_era5(era_dir: str,
 
     if pd.to_datetime(last_date + np.timedelta64(min_lag_time_days, 'D')) > datetime.now():
         # If the last date in the zarr file is within min_lag_time_days of today then exit
-        CL.log_message(f'{last_date} is within {min_lag_time_days} days of today. Not running')
-        return
+        CL.ping('STOPPING', f'{last_date}-is-within-{min_lag_time_days}-days-of-today.-Stopping')
+        exit()
 
     date_range = pd.date_range(start=last_date + pd.DateOffset(days=1),
                                end=today - pd.DateOffset(days=min_lag_time_days),
@@ -87,7 +87,7 @@ def download_era5(era_dir: str,
     logging.info(date_range[0])
     logging.info(date_range[-1])
     CL.add_time_period(date_range.tolist())
-    CL.log_message('RUNNING', "Beginning download")
+    CL.ping('RUNNING', "Downloading-era5-data")
 
     # make a list of unique year and month combinations in the list
     download_requests = []
@@ -287,15 +287,21 @@ def check_installations(daily_zarr: str,
         logging.info(f'Downloading {s3_hourly_zarr}')
         get_local_copy(s3_hourly_zarr, hourly_zarr, credentials)
 
-def check_zarrs_match(local_zarr_path: str, s3_zarr_path: str):
+def check_zarrs_match(local_zarr_path: str, s3_zarr_path: str, CL: CloudLog) -> None:
     """
     Check that the local zarr matches the s3 zarr.
     """
     local_zarr = xr.open_zarr(local_zarr_path)
     s3_zarr = xr.open_zarr(s3_zarr_path, storage_options=storage_options)
 
-    assert (local_zarr['time'] == s3_zarr['time']).all(), "Time arrays do not match"
-    assert local_zarr['Q'].shape == s3_zarr['Q'].shape, "Shapes do not match"
+    if not (local_zarr['time'] == s3_zarr['time']).all():
+        CL.ping('FAIL', f"Time-arrays-do-not-match-in-{local_zarr_path}")
+        exit()
+
+    if local_zarr['Q'].shape != s3_zarr['Q'].shape:
+        CL.ping('FAIL', f"Shapes-do-not-match-{local_zarr_path}")
+        exit()
+
 
 def setup_configs(configs_dir: str,
                   s3_configs_dir: str,
@@ -341,13 +347,14 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
             s3.get(most_recent_qfinal, local_file_name)
     return
 
-def verify_era5_data(runoff_dir: str, hourly_zarr: str) -> None:
+def verify_era5_data(runoff_dir: str, hourly_zarr: str, CL: CloudLog) -> None:
     """
     Verifies that the ERA5 data is compatible with the retrospective zarr
     """
     runoff_files = glob.glob(os.path.join(runoff_dir, '*.nc'))
     if not runoff_files:
-        raise FileNotFoundError("No ERA5 runoff files found. ERA5 probably not downloaded correctly.")
+        CL.ping('STOPPING', f"No-runoff-files-found")
+        exit()
     
     with xr.open_mfdataset(runoff_files) as ds , xr.open_zarr(hourly_zarr) as hourly_ds:
         # Check the the time dimension
@@ -356,11 +363,11 @@ def verify_era5_data(runoff_dir: str, hourly_zarr: str) -> None:
         total_time = np.concatenate((retro_time, ro_time))
         difs = np.diff(total_time)
         if not np.all(difs == difs[0]):
-            raise ValueError('Time dimension of ERA5 is not compatible with the retrospective zarr')
+            CL.ping('STOPPING', f"Time-dimension-of-ERA5-is-not-compatible-with-the-retrospective-zarr")
 
         # Check that there are no nans
         if np.isnan(ds['ro'].values).any():
-            raise ValueError('ERA5 data contains nans')
+            CL.ping('STOPPING', f"ERA5-data-contains-nans")
         
 def processes(runoff_dir) -> int:
     # For inflows files and multiprocess, for each 1GB of daily runoff data, we need ~ 6GB for peak memory consumption.
@@ -440,7 +447,8 @@ def _make_inflow_for_vpu_star(args):
 def inflows(runoff_dir: str,
             configs_dir: str,
             inflows_dir: str,
-            p: Pool) -> None:
+            p: Pool,
+            CL: CloudLog) -> None:
     vpu_numbers = [
         (os.path.basename(d), configs_dir, inflows_dir, runoff_dir)
         for d in glob.glob(os.path.join(configs_dir, '*'))
@@ -456,8 +464,8 @@ def inflows(runoff_dir: str,
 
     # check that all inflow files were created correctly
     if not len(glob.glob(os.path.join(inflows_dir, '*', '*.nc'))) == expected_file_count:
-        raise FileNotFoundError("Not all inflow files were created correctly")
-
+        CL.ping('FAIL', 'Not-all-inflow-files-were-created-correctly')
+        exit()
     return
 
 def _run_river_route(vpu_dir: str, outputs_dir: str, inflows_dir: str) -> None:
@@ -519,7 +527,8 @@ def concatenate_outputs(outputs_dir: str,
     # Build the week dataset
     qouts = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')))
     if not qouts:
-        raise FileNotFoundError("No Qout files found. River route probably not run correctly.")
+        CL.ping('FAIL', f"No-Qout-files-found")
+        exit()
 
     with xr.open_zarr(daily_zarr_path) as daily_zarr:
         with xr.open_mfdataset(
@@ -527,7 +536,7 @@ def concatenate_outputs(outputs_dir: str,
                 combine='nested',
                 concat_dim='river_id',
                 parallel=True,
-                preprocess=drop_coords
+                # preprocess=drop_coords
         ).reindex(river_id=daily_zarr['river_id']) as new_ds:
             earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
             latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
@@ -538,7 +547,7 @@ def concatenate_outputs(outputs_dir: str,
                 chunks = hourly_zarr.chunks
 
             # Append hourly data first
-            CL.log_message('RUNNING', f'Appending to hourly zarr: {earliest_date} to {latest_date}')
+            CL.ping('RUNNING', f'Appending-to-hourly-zarr-{earliest_date}-to-{latest_date}')
             (
                 new_ds
                 .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
@@ -546,7 +555,7 @@ def concatenate_outputs(outputs_dir: str,
             )
 
             # Append daily data
-            CL.log_message('RUNNING', f'Appending to daily zarr: {earliest_date} to {latest_date}')
+            CL.ping('RUNNING', f'Appending-to-daily-zarr-{earliest_date}-to-{latest_date}')
             new_ds = new_ds.resample(time='1D').mean('time')
             chunks = daily_zarr.chunks
             (
@@ -564,13 +573,13 @@ def verify_concatenated_outputs(zarr: str, CL: CloudLog) -> None:
         time_size = ds.chunks['time'][0]
         # Test a river to see if there are nans
         if np.isnan(ds.isel(river_id=1, time=slice(time_size, -1))['Q'].values).any():
-            CL.log_message('FAIL', f'{zarr} contain nans')
+            CL.ping('FAIL', f'{zarr}-contain-nans')
             exit()
 
         # Verify that the time dimension is correct
         times = ds['time'].values
         if not np.all(np.diff(times) == times[1] - times[0]):
-            CL.log_message('FAIL', f'Time dimension of {zarr} is incorrect')
+            CL.ping('FAIL', f'Time-dimension-of-{zarr}-is-incorrect')
             exit()
 
 def sync_local_to_s3(outputs_dir: str,
@@ -588,7 +597,7 @@ def sync_local_to_s3(outputs_dir: str,
     Raises:
         Exception: If the sync command fails.
     """
-    CL.log_message('RUNNING', 'Syncing Qfinal files to S3')
+    CL.ping('RUNNING', 'syncing-finalstates-to-S3')
     result = subprocess.run(
         f's5cmd '
         f'--credentials-file {credentials} --profile odp '
@@ -598,14 +607,16 @@ def sync_local_to_s3(outputs_dir: str,
         shell=True, capture_output=True, text=True,
     )
     if not result.returncode == 0:
-        raise Exception(f"Sync failed. Error: {result.stderr}")
+        CL.ping('FAIL', f"Syncing-finalstates-to-S3-failed")
+        logging.error(result.stderr)
+        exit()
 
     # sync the zarrs. We can use sync because 0.* files are not is not on local side
     for zarr, s3_zarr in zip([local_hourly_zarr, local_daily_zarr], [s3_hourly_zarr, s3_daily_zarr]):
     # for zarr, s3_zarr in zip([local_hourly_zarr], [s3_hourly_zarr]):
         # files = glob.glob(os.path.join(zarr), 'Q', '*')
         # chunks = sorted({os.path.basename(f).split('.')[0]  for f in files})
-        CL.log_message('RUNNING', f'Syncing {zarr} to S3')
+        CL.ping('RUNNING', f'syncing-{zarr}-to-S3')
         result = subprocess.run(
             f"s5cmd "
             f"--credentials-file {credentials} --profile odp "
@@ -615,13 +626,16 @@ def sync_local_to_s3(outputs_dir: str,
             shell=True, capture_output=True, text=True,
         )
         if not result.returncode == 0:
-            raise Exception(f"Sync failed. Error: {result.stderr}")
+            CL.ping('FAIL', f"Syncing-{zarr}-to-S3-failed")
+            logging.error(result.stderr)
+            exit()
         
     return
 
 def update_monthly_zarrs(daily_zarr: str,
                          monthly_timesteps: str,
-                         monthly_timeseries: str) -> None:
+                         monthly_timeseries: str,
+                         CL: CloudLog) -> None:
     daily_ds = xr.open_zarr(daily_zarr)
     monthly_steps_ds = xr.open_zarr(monthly_timesteps, storage_options=storage_options)
 
@@ -631,7 +645,7 @@ def update_monthly_zarrs(daily_zarr: str,
     next_month = last_monthly_time.astype('datetime64[M]') + np.timedelta64(1, 'M')
     current_month = (last_daily_time + np.timedelta64(1, 'D')).astype('datetime64[M]')
     if current_month > next_month:
-        logging.info(f'Updating monthly zarrs: [{next_month}, {current_month})')
+        CL.ping('RUNNING', f'Updating-monthly-zarrs-{next_month}-to-{current_month}')
         # Find number of months to add
         months_ds = daily_ds.sel(time=slice(next_month, current_month))
         months_ds = months_ds.resample({'time':'MS'}).mean()
@@ -655,7 +669,8 @@ def update_monthly_zarrs(daily_zarr: str,
 def update_yearly_zarrs(hourly_zarr: str,
                         annual_timesteps: str,
                         annual_timeseries: str,
-                        annual_maximums: str) -> None:
+                        annual_maximums: str,
+                        CL: CloudLog) -> None:
     hourly_ds = xr.open_zarr(hourly_zarr)
     annual_steps_ds = xr.open_zarr(annual_timesteps, storage_options=storage_options)
 
@@ -666,7 +681,7 @@ def update_yearly_zarrs(hourly_zarr: str,
     current_year = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[Y]')
 
     if current_year > next_year:
-        logging.info(f'Updating yearly zarrs: [{next_year}, {current_year})')
+        CL.ping('RUNNING', f'Updating-yearly-zarrs-{next_year}-to-{current_year}')
         # Find number of years to add
         years_ds = hourly_ds.sel(time=slice(next_year, current_year))
         years_ds = years_ds.resample({'time':'YS'}).mean()
@@ -698,6 +713,7 @@ def update_yearly_zarrs(hourly_zarr: str,
         )
 
 def cleanup(data_dir: str,
+            era_dir: str,
             runoff_dir: str,
             inflows_dir: str,
             outputs_dir: str,) -> None:
@@ -709,6 +725,11 @@ def cleanup(data_dir: str,
     os.system(f'sudo chown -R $USER:$USER {data_dir}')
 
     # delete runoff data
+    logging.info('Deleting era data')
+    if era_dir:
+        for file in glob.glob(os.path.join(era_dir, '*')):
+            os.remove(file)
+
     logging.info('Deleting runoff data')
     if runoff_dir:
         for file in glob.glob(os.path.join(runoff_dir, '*')):

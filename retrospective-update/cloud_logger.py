@@ -1,9 +1,11 @@
 import datetime
+import os
 import json
 import sys
 import time
 import logging
 
+import requests
 import boto3
 import numpy as np
 
@@ -20,6 +22,8 @@ console_handler.setFormatter(formatter)
 
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
+PING_URL = os.getenv('PING_URL')
 
 class CloudLog():
     """
@@ -54,6 +58,7 @@ class CloudLog():
                  ):
         self.LOG_GROUP_NAME = LOG_GROUP_NAME
         self.LOG_STREAM_NAME = LOG_STREAM_NAME
+        self.warn = False
 
         self.save_path = save_path
         self.start = datetime.datetime.now().ctime()
@@ -137,6 +142,17 @@ class CloudLog():
         self.time_period = None
         self.message = ''
 
+    def ping(self, status: str, message: str = None) -> None:
+        self.log_message(status, message)
+        if not PING_URL:
+            return
+        if 'error' in status.lower():
+            message = f"Error:{message}"
+
+        requests.post(f"{PING_URL}?task=weekly-retro-update&status={message}")
+        pass
+
+
     def log_message(self, status: str, message: str = None) -> dict:
         """
         Logs a message to CloudWatch.
@@ -148,8 +164,6 @@ class CloudLog():
         Returns:
             dict: The response from the CloudWatch API.
         """
-        global LOG_GROUP_NAME
-        global LOG_STREAM_NAME
         if message is not None:
             self.message = message
         log_message = {
@@ -169,8 +183,8 @@ class CloudLog():
         # Send the log message to CloudWatch
         try:
             response = self.client.put_log_events(
-                logGroupName=LOG_GROUP_NAME,
-                logStreamName=LOG_STREAM_NAME,
+                logGroupName=self.LOG_GROUP_NAME,
+                logStreamName=self.LOG_STREAM_NAME,
                 logEvents=[
                     {
                         'timestamp': int(round(time.time() * 1000)),
@@ -180,4 +194,8 @@ class CloudLog():
             )
             return response
         except Exception as e:
-            pass
+            if not self.warn:
+                logging.warning(f"Failed to log message to CloudWatch: {e}")
+                self.warn = True
+            else:
+                pass
