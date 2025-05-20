@@ -10,6 +10,8 @@ dependencies:
   - dask
   - distributed
   - flox
+  - geopandas
+  - qgis
   - h5netcdf
   - matplotlib
   - natsort

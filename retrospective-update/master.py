@@ -44,9 +44,10 @@ CONFIGS_DIR = os.path.join(volume_directory, 'data', 'configs')
 INFLOWS_DIR = os.path.join(volume_directory, 'data', 'inflows')
 RUNOFF_DIR = os.path.join(volume_directory, 'data', 'era5_runoff')
 OUTPUTS_DIR = os.path.join(volume_directory, 'data', 'outputs')
+HYDROSOS_DIR = os.path.join(volume_directory, 'data', 'hydrosos')
 
 # Cleanup no matter what
-atexit.register(f.cleanup, volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
+atexit.register(f.cleanup, volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR)
 
 if __name__ == '__main__':
     try:
@@ -59,6 +60,8 @@ if __name__ == '__main__':
         os.makedirs(RUNOFF_DIR, exist_ok=True)
         os.makedirs(OUTPUTS_DIR, exist_ok=True)
         os.makedirs(INFLOWS_DIR, exist_ok=True)
+        os.makedirs(ERA_DIR, exist_ok=True)
+        os.makedirs(HYDROSOS_DIR, exist_ok=True)
 
         CL.ping('START', 'Starting-retrospective-update')
         f.download_era5(ERA_DIR, RUNOFF_DIR, S3_DAILY_ZARR, MIN_LAG_TIME_DAYS, CL)
@@ -100,13 +103,13 @@ if __name__ == '__main__':
         f.sync_local_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, ODP_CREDENTIALS_FILE, CL)
 
         CL.log_message('RUNNING', 'updating monthly zarrs')
-        f.update_monthly_zarrs(LOCAL_DAILY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES, CL)
+        f.update_monthly_zarrs(LOCAL_DAILY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES, HYDROSOS_DIR, ODP_CREDENTIALS_FILE, CL)
         
         CL.log_message('RUNNING', 'updating annual zarrs')
         f.update_yearly_zarrs(LOCAL_HOURLY_ZARR, S3_ANNUAL_TIMESTEPS, S3_ANNUAL_TIMESERIES, S3_ANNUAL_MAXIMUMS, CL)
 
         CL.ping('RUNNING', 'cleaning-up')
-        f.cleanup(volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR)
+        f.cleanup(volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR)
 
         CL.ping('COMPLETE', "Retrospective-update-complete")
     except Exception as e:
