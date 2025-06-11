@@ -840,7 +840,7 @@ def update_hydrosos_maps(date_range: pd.DatetimeIndex,
             QgsProject.instance().addMapLayer(layer)
 
             # Create individual output directory
-            output_dir = os.path.join(hydro_sos_dir, "maps", str(year), str(month).zfill(2))
+            output_dir = os.path.join(hydro_sos_dir, "maps", f'year={year}', f'month={str(month).zfill(2)}')
             os.makedirs(output_dir, exist_ok=True)
 
             extent = layer.extent()
@@ -879,7 +879,7 @@ def update_hydrosos_maps(date_range: pd.DatetimeIndex,
                             os.remove(file_path)
 
             # Use s5cmd to sync the output directory to S3
-            s3_path = f'{S3_HYDROSOS_DIR}/{year}/{month}/'
+            s3_path = f'{S3_HYDROSOS_DIR}/year={year}/month={month}/'
             result = subprocess.run(
                 f's5cmd '
                 f'--credentials-file {credentials} --profile odp '

@@ -150,8 +150,6 @@ class CloudLog():
             message = f"Error:{message}"
 
         requests.post(f"{PING_URL}?task=weekly-retro-update&status={message}")
-        pass
-
 
     def log_message(self, status: str, message: str = None) -> dict:
         """
