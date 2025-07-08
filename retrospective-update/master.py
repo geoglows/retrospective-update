@@ -103,7 +103,7 @@ if __name__ == '__main__':
         f.sync_local_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, ODP_CREDENTIALS_FILE, CL)
 
         CL.log_message('RUNNING', 'updating monthly zarrs')
-        f.update_monthly_zarrs(LOCAL_DAILY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES, HYDROSOS_DIR, ODP_CREDENTIALS_FILE, CL)
+        f.update_monthly_zarrs(LOCAL_HOURLY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES, HYDROSOS_DIR, ODP_CREDENTIALS_FILE, CL)
         
         CL.log_message('RUNNING', 'updating annual zarrs')
         f.update_yearly_zarrs(LOCAL_HOURLY_ZARR, S3_ANNUAL_TIMESTEPS, S3_ANNUAL_TIMESERIES, S3_ANNUAL_MAXIMUMS, CL)

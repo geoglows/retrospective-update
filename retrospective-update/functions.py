@@ -46,6 +46,9 @@ FLOW_CUTOFF_NC_BY_HYBASID = os.getenv('FLOW_CUTOFF_NC_BY_HYBASID')
 
 S3_HYDROSOS_DIR = os.getenv('S3_HYDROSOS_DIR')
 
+# Filter all deprecation warnings from botocore
+warnings.filterwarnings("ignore", category=DeprecationWarning, module='botocore')
+
 class DownloadWorker(Thread):
     """
     A worker thread that downloads data using the provided parameters.
@@ -879,7 +882,7 @@ def update_hydrosos_maps(date_range: pd.DatetimeIndex,
                             os.remove(file_path)
 
             # Use s5cmd to sync the output directory to S3
-            s3_path = f'{S3_HYDROSOS_DIR}/year={year}/month={month}/'
+            s3_path = f'{S3_HYDROSOS_DIR}/year={year}/month={str(month).zfill(2)}/'
             result = subprocess.run(
                 f's5cmd '
                 f'--credentials-file {credentials} --profile odp '
@@ -898,24 +901,24 @@ def update_hydrosos_maps(date_range: pd.DatetimeIndex,
 
     app.exitQgis()
 
-def update_monthly_zarrs(daily_zarr: str,
+def update_monthly_zarrs(hourly_zarr: str,
                          monthly_timesteps: str,
                          monthly_timeseries: str,
                          hydro_sos_dir: str,
                          credentials: str,
                          CL: CloudLog) -> None:
-    daily_ds = xr.open_zarr(daily_zarr)
+    hourly_ds = xr.open_zarr(hourly_zarr)
     monthly_steps_ds = xr.open_zarr(monthly_timesteps, storage_options=storage_options)
 
     # Check if there is at least a whole month of data in the daily zarr not in the daily zarr
-    last_daily_time = daily_ds['time'][-1].values
+    last_hourly_time = hourly_ds['time'][-1].values
     last_monthly_time = monthly_steps_ds['time'][-1].values
     next_month = last_monthly_time.astype('datetime64[M]') + np.timedelta64(1, 'M')
-    current_month = (last_daily_time + np.timedelta64(1, 'D')).astype('datetime64[M]')
-    if current_month > next_month:
-        CL.ping('RUNNING', f'Updating-monthly-zarrs-{next_month}-to-{current_month}')
+    last_whole_month = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[M]') - np.timedelta64(1, 'M')
+    if last_whole_month >= next_month:
+        CL.ping('RUNNING', f'Updating-monthly-zarrs-{next_month}-to-{last_whole_month}')
         # Find number of months to add
-        months_ds = daily_ds.sel(time=slice(next_month, current_month))
+        months_ds = hourly_ds.sel(time=slice(next_month, last_whole_month))
         months_ds = months_ds.resample({'time':'MS'}).mean()
 
         # Now chunk and append
@@ -935,7 +938,7 @@ def update_monthly_zarrs(daily_zarr: str,
         )
 
         # Update the hydrosos maps
-        date_range = pd.date_range(next_month, current_month, freq='MS', inclusive='left')
+        date_range = pd.date_range(next_month, last_whole_month, freq='MS', inclusive='left')
         update_hydrosos_maps(date_range, monthly_timesteps, hydro_sos_dir, credentials, CL)
 
     
@@ -951,12 +954,12 @@ def update_yearly_zarrs(hourly_zarr: str,
     last_hourly_time = hourly_ds['time'][-1].values
     last_annual_time = annual_steps_ds['time'][-1].values
     next_year = last_annual_time.astype('datetime64[Y]') + np.timedelta64(1, 'Y')
-    current_year = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[Y]')
+    last_whole_year = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[Y]') - np.timedelta64(1, 'Y')
 
-    if current_year > next_year:
-        CL.ping('RUNNING', f'Updating-yearly-zarrs-{next_year}-to-{current_year}')
+    if last_whole_year >= next_year:
+        CL.ping('RUNNING', f'Updating-yearly-zarrs-{next_year}-to-{last_whole_year}')
         # Find number of years to add
-        years_ds = hourly_ds.sel(time=slice(next_year, current_year))
+        years_ds = hourly_ds.sel(time=slice(next_year, last_whole_year))
         years_ds = years_ds.resample({'time':'YS'}).mean()
 
         # Now chunk and append
@@ -976,7 +979,7 @@ def update_yearly_zarrs(hourly_zarr: str,
         )
 
         # Do the same for maximums
-        years_ds = hourly_ds.sel(time=slice(next_year, current_year))
+        years_ds = hourly_ds.sel(time=slice(next_year, last_whole_year))
         years_ds = years_ds.resample({'time':'YS'}).max()
         chunks = xr.open_zarr(annual_maximums, storage_options=storage_options).chunks
         (
