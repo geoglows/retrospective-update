@@ -77,7 +77,6 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'preparing config files')
         f.setup_configs(CONFIGS_DIR, S3_CONFIGS_DIR, CL)
 
-        f.cleanup(volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR, True)
         CL.log_message('RUNNING', 'getting initial qinits')
         f.get_qinits_from_s3(s3, LOCAL_HOURLY_ZARR, CONFIGS_DIR, S3_QFINAL_DIR, OUTPUTS_DIR)
 
