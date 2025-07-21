@@ -348,6 +348,7 @@ def setup_configs(configs_dir: str,
             raise RuntimeError(f"Failed to obtain configs from S3: {result.stderr}")
 
 def get_qinits_from_s3(s3: s3fs.S3FileSystem,
+                       local_hourly_zarr: str,
                        configs_dir: str,
                        s3_qfinal_dir: str,
                        outputs_dir: str) -> None:
@@ -366,13 +367,35 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
     Returns:
     - None
     """
+    # First find the last date in the local hourly zarr
+    with xr.open_zarr(local_hourly_zarr) as ds:
+        last_retro_time: np.datetime64 = ds['time'][-1].values
+
+    last_retro_time = pd.to_datetime(last_retro_time).strftime('%Y%m%d%H%M')
+
     # download the qfinal files
     for vpu in tqdm.tqdm(glob.glob(os.path.join(configs_dir, '*'))):
         vpu = os.path.basename(vpu)
-        most_recent_qfinal = natsort.natsorted(s3.ls(f'{s3_qfinal_dir}/{vpu}/'))[-1]
-        local_file_name = os.path.join(outputs_dir, vpu, os.path.basename(most_recent_qfinal))
-        if not os.path.exists(local_file_name):
-            s3.get(most_recent_qfinal, local_file_name)
+        s3_qfinals = [f for f in s3.ls(f'{s3_qfinal_dir}/{vpu}/') if last_retro_time in f]
+        local_qfinals = set(glob.glob(os.path.join(outputs_dir, vpu, 'finalstate*.parquet')))
+        if not s3_qfinals:
+            raise FileNotFoundError(f"No finalstate files found for {vpu} in S3 at {s3_qfinal_dir} for {last_retro_time}")
+        
+        s3_qfinal = s3_qfinals[0]  # Take the first one, there should only be one
+        
+        exists = False
+        for local_file_name in local_qfinals:
+            if os.path.basename(local_file_name) == os.path.basename(s3_qfinal):
+                # If the local file already exists, skip downloading
+                exists = True
+                continue
+
+            # Otherwise, remove the local file that doesn't match
+            os.remove(local_file_name)
+        if not exists:
+            # Download the file from S3
+            s3.get(s3_qfinal, os.path.join(outputs_dir, vpu, os.path.basename(s3_qfinal)))
+
     return
 
 def verify_era5_data(runoff_dir: str, hourly_zarr: str, CL: CloudLog) -> None:
@@ -564,7 +587,7 @@ def concatenate_outputs(outputs_dir: str,
                 combine='nested',
                 concat_dim='river_id',
                 parallel=True,
-                # preprocess=drop_coords
+                preprocess=drop_coords
         ).reindex(river_id=daily_zarr['river_id']) as new_ds:
             earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
             latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
@@ -610,21 +633,10 @@ def verify_concatenated_outputs(zarr: str, CL: CloudLog) -> None:
             CL.ping('FAIL', f'Time-dimension-of-{zarr}-is-incorrect')
             exit()
 
-def sync_local_to_s3(outputs_dir: str,
-                     s3_qfinal_dir: str, 
-                     local_hourly_zarr: str,
-                     local_daily_zarr: str,
-                     s3_hourly_zarr: str,
-                     s3_daily_zarr: str,
-                     credentials: str,
-                     CL: CloudLog) -> None:
-    """
-    Put our local edits on the zarrs to S3.
-    Also upload qfinal files to S3.
-
-    Raises:
-        Exception: If the sync command fails.
-    """
+def sync_qfinals_to_s3(outputs_dir: str,
+                       s3_qfinal_dir: str,
+                       credentials: str,
+                       CL: CloudLog) -> None:
     CL.ping('RUNNING', 'syncing-finalstates-to-S3')
     result = subprocess.run(
         f's5cmd '
@@ -639,6 +651,18 @@ def sync_local_to_s3(outputs_dir: str,
         logging.error(result.stderr)
         exit()
 
+def sync_local_to_s3(local_hourly_zarr: str,
+                     local_daily_zarr: str,
+                     s3_hourly_zarr: str,
+                     s3_daily_zarr: str,
+                     credentials: str,
+                     CL: CloudLog) -> None:
+    """
+    Put our local edits on the zarrs to S3.
+
+    Raises:
+        Exception: If the sync command fails.
+    """
     # sync the zarrs. We can use sync because 0.* files are not is not on local side
     for zarr, s3_zarr in zip([local_hourly_zarr, local_daily_zarr], [s3_hourly_zarr, s3_daily_zarr]):
     # for zarr, s3_zarr in zip([local_hourly_zarr], [s3_hourly_zarr]):
@@ -993,7 +1017,8 @@ def cleanup(data_dir: str,
             runoff_dir: str,
             inflows_dir: str,
             outputs_dir: str,
-            hydrosos_dir: str,) -> None:
+            hydrosos_dir: str,
+            clear_qinit: bool = False) -> None:
     """
     Cleans up the working directory by deleting namelists, inflow files, and
     caching qfinals and qouts.
@@ -1026,7 +1051,11 @@ def cleanup(data_dir: str,
     logging.info('Deleting qfinals')
     for vpu_dir in glob.glob(os.path.join(outputs_dir, '*')):
         qfinal_files = natsort.natsorted(glob.glob(os.path.join(vpu_dir, 'finalstate*.parquet')))
-        if len(qfinal_files) > 1:
+        if clear_qinit:
+            # remove all qfinal files
+            for f in qfinal_files:
+                os.remove(f)
+        elif len(qfinal_files) > 1:
             for f in qfinal_files[:-1]:
                 os.remove(f)
 

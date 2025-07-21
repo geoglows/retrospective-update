@@ -46,11 +46,9 @@ RUNOFF_DIR = os.path.join(volume_directory, 'data', 'era5_runoff')
 OUTPUTS_DIR = os.path.join(volume_directory, 'data', 'outputs')
 HYDROSOS_DIR = os.path.join(volume_directory, 'data', 'hydrosos')
 
-# Cleanup no matter what
-atexit.register(f.cleanup, volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR)
-
 if __name__ == '__main__':
     try:
+        atexit.register(f.cleanup, volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR, True)
         CL = CloudLog(LOG_GROUP_NAME, LOG_STREAM_NAME, ACCESS_KEY_ID, SECRET_ACCESS_KEY, REGION)
         session = aiobotocore.session.AioSession(profile='odp')
         s3 = s3fs.S3FileSystem(session=session)
@@ -79,8 +77,9 @@ if __name__ == '__main__':
         CL.log_message('RUNNING', 'preparing config files')
         f.setup_configs(CONFIGS_DIR, S3_CONFIGS_DIR, CL)
 
+        f.cleanup(volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR, True)
         CL.log_message('RUNNING', 'getting initial qinits')
-        f.get_qinits_from_s3(s3, CONFIGS_DIR, S3_QFINAL_DIR, OUTPUTS_DIR)
+        f.get_qinits_from_s3(s3, LOCAL_HOURLY_ZARR, CONFIGS_DIR, S3_QFINAL_DIR, OUTPUTS_DIR)
 
         num_processes = f.processes(RUNOFF_DIR)
         CL.log_message('RUNNING', f'preparing inflows and namelists with {num_processes} processes')
@@ -100,7 +99,8 @@ if __name__ == '__main__':
             f.verify_concatenated_outputs(z, CL)
 
         CL.log_message('RUNNING', 'syncing to s3')
-        f.sync_local_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, ODP_CREDENTIALS_FILE, CL)
+        f.sync_qfinals_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, ODP_CREDENTIALS_FILE, CL)
+        f.sync_local_to_s3(LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, ODP_CREDENTIALS_FILE, CL)
 
         CL.log_message('RUNNING', 'updating monthly zarrs')
         f.update_monthly_zarrs(LOCAL_HOURLY_ZARR, S3_MONTHLY_TIMESTEPS, S3_MONTHLY_TIMESERIES, HYDROSOS_DIR, ODP_CREDENTIALS_FILE, CL)
@@ -112,6 +112,7 @@ if __name__ == '__main__':
         f.cleanup(volume_directory, ERA_DIR, RUNOFF_DIR, INFLOWS_DIR, OUTPUTS_DIR, HYDROSOS_DIR)
 
         CL.ping('COMPLETE', "Retrospective-update-complete")
+        atexit.unregister(f.cleanup)
     except Exception as e:
         error = traceback.format_exc()
         CL.ping('FAIL', str(e))
