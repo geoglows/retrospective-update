@@ -89,6 +89,9 @@ if __name__ == '__main__':
 
             CL.ping('RUNNING', 'Running-river-route')
             f.run_river_route(CONFIGS_DIR, OUTPUTS_DIR, INFLOWS_DIR, p)
+
+        CL.log_message('RUNNING', 'syncing qfinals to s3')
+        f.sync_qfinals_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, ODP_CREDENTIALS_FILE, CL)
         
         CL.ping('RUNNING', 'concatenating-outputs')
         f.concatenate_outputs(OUTPUTS_DIR, LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, CL)
@@ -98,7 +101,6 @@ if __name__ == '__main__':
             f.verify_concatenated_outputs(z, CL)
 
         CL.log_message('RUNNING', 'syncing to s3')
-        f.sync_qfinals_to_s3(OUTPUTS_DIR, S3_QFINAL_DIR, ODP_CREDENTIALS_FILE, CL)
         f.sync_local_to_s3(LOCAL_HOURLY_ZARR, LOCAL_DAILY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, ODP_CREDENTIALS_FILE, CL)
 
         CL.log_message('RUNNING', 'updating monthly zarrs')
