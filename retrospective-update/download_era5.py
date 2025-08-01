@@ -90,7 +90,7 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
 
     with xr.open_mfdataset(downloaded_files) as ds, xr.open_zarr(hourly_zarr) as hourly_ds:
         # Check the time dimension
-        ro_time = ds['time'].values
+        ro_time = ds['valid_time'].values
         retro_time = hourly_ds['time'].values
         total_time = np.concatenate((retro_time, ro_time))
         difs = np.diff(total_time)
