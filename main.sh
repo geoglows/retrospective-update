@@ -49,6 +49,7 @@ mkdir -p $ERA5_DIR
 mkdir -p $FINAL_STATES_DIR
 
 # todo check that the cdsapi file exists and that there are aws credentials and defaults set
+# todo create and run a prepare step
 # check that the configs directory and both local zarrs exist and are not empty
 if [ ! -d "$CONFIGS_DIR" ] || [ -z "$(ls -A $CONFIGS_DIR)" ]; then
     echo "Error: Configs directory is empty or does not exist."
@@ -72,13 +73,13 @@ if [ $? -ne 0 ]; then
 fi
 
 # run the main python script
-#python /home/ubuntu/retrospective-update/retrospective-update/master.py
-#if [ $? -ne 0 ]; then
-#    echo "Error: Failed to run the routing script."
-#    exit 1
-#fi
+python /home/ubuntu/retrospective-update/retrospective-update/master.py
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to run the routing script."
+    exit 1
+fi
 
 # empty the outputs and era5 directories
-rm -r $OUTPUTS_DIR/*
-rm -r $ERA5_DIR/*
-rm -r $HYDROSOS_DIR/*
+#rm -r $OUTPUTS_DIR/*
+#rm -r $ERA5_DIR/*
+#rm -r $HYDROSOS_DIR/*

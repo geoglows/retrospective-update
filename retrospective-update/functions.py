@@ -14,10 +14,6 @@ from natsort import natsorted
 from cloud_logger import CloudLog
 
 
-# Filter all deprecation warnings from botocore
-warnings.filterwarnings("ignore", category=DeprecationWarning, module='botocore')
-
-
 def get_local_copy(s3_path: str, local_path: str, credentials: str) -> None:
     """
     Get a local copy of a file from S3.
@@ -38,24 +34,6 @@ def get_local_copy(s3_path: str, local_path: str, credentials: str) -> None:
         raise Exception(f"Download failed. Error: {result.stderr}")
 
     return
-
-
-
-def setup_configs(configs_dir: str,
-                  s3_configs_dir: str,
-                  CL: CloudLog, ) -> None:
-    """
-    Setup all the directories we need, populate files
-    """
-
-    os.makedirs(configs_dir, exist_ok=True)
-    if len(glob(os.path.join(configs_dir, '*', '*.csv'))) == 0:
-        result = subprocess.run(f"s5cmd sync {s3_configs_dir}/* {configs_dir}", shell=True, capture_output=True,
-                                text=True)
-        if result.returncode == 0:
-            CL.ping('RUNNING', "Obtained configs from S3")
-        else:
-            raise RuntimeError(f"Failed to obtain configs from S3: {result.stderr}")
 
 
 def get_qinits_from_s3(s3: s3fs.S3FileSystem,
@@ -80,9 +58,10 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
     """
     # First find the last date in the local hourly zarr
     with xr.open_zarr(local_hourly_zarr) as ds:
-        last_retro_time: np.datetime64 = ds['time'][-1].values
+        last_retro_time = ds['time'][-1].values
 
     last_retro_time = pd.to_datetime(last_retro_time).strftime('%Y%m%d%H%M')
+    # todo use s5cmd to find the init files directly since the date is known
 
     # download the qfinal files
     for vpu in tqdm.tqdm(glob(os.path.join(configs_dir, '*'))):
@@ -110,7 +89,7 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
     return
 
 
-def route_vpu(config_dir: str, outputs_dir: str, era5_file: str, ):
+def route_vpu(config_dir: str, era5_files: list[str], outputs_dir: str, ):
     vpu = os.path.basename(config_dir)
     params_file = os.path.join(config_dir, 'routing_parameters.parquet')
     weight_table = os.path.join(config_dir, f'gridweights_ERA5_{vpu}.nc')
@@ -126,23 +105,25 @@ def route_vpu(config_dir: str, outputs_dir: str, era5_file: str, ):
     output_dir = os.path.join(outputs_dir, vpu)
     os.makedirs(output_dir, exist_ok=True)
 
-    for catchment_volumes_file in natsorted(glob(os.path.join(inflows_dir, os.path.basename(vpu_dir), '*.nc'))):
-        outflow_file = os.path.join(output_dir, os.path.basename(catchment_volumes_file).replace('volumes', 'Qout'))
-        initial_state_file = natsorted(glob(os.path.join(output_dir, 'finalstate*.parquet')))[-1]
-        final_state_file = os.path.join(output_dir, f"finalstate_{outflow_file.split('_')[-1].replace('.nc', '.parquet')}")
-        (
-            rr
-            .Muskingum(
-                routing_params_file=params_file,
-                connectivity_file=connectivity_file,
-                catchment_volumes_file=catchment_volumes_file,
-                outflow_file=outflow_file,
-                initial_state_file=initial_state_file,
-                final_state_file=final_state_file,
-                progress_bar=False,
-            )
-            .route()
+    # todo probably determine initial and final state timestampes earlier and pass them along to this
+    # initial_state_file = natsorted(glob(os.path.join(output_dir, 'finalstate*.parquet')))[-1]
+    initial_state_file = f'/data/final-states/{vpu}/finalstate_202507232300.parquet'
+    final_state_file = os.path.join('/data/final-states', vpu, f"finalstate_{os.path.basename(initial_state_file)}")
+    output_files = [os.path.join(outputs_dir, os.path.basename(era5_file).replace('era5_', 'Q_')) for era5_file in era5_files]
+
+    (
+        rr
+        .Muskingum(
+            routing_params_file=params_file,
+            connectivity_file=connectivity_file,
+            runoff_depths_file=era5_files,
+            outflow_file=output_files,
+            initial_state_file=initial_state_file,
+            final_state_file=final_state_file,
+            progress_bar=False,
         )
+        .route()
+    )
 
 
 def drop_coords(ds: xr.Dataset, qout: str = 'Q'):
@@ -156,7 +137,7 @@ def drop_coords(ds: xr.Dataset, qout: str = 'Q'):
     Returns:
         xr.Dataset: The modified dataset with only the specified variable.
     """
-    return ds[[qout]].reset_coords(drop=True)
+    return ds[[qout, ]].reset_coords(drop=True)
 
 
 def concatenate_outputs(outputs_dir: str,
