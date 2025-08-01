@@ -33,7 +33,7 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
         raise EnvironmentError('Last date in zarr is more recent than expected minimum lag time')
     date_range = pd.date_range(start=first_date_to_simulate, end=final_date_to_simulate, freq='D', )
 
-    if not date_range:
+    if not len(date_range):
         cl.ping('STOPPING', f'No dates to download between {first_date_to_simulate} and {final_date_to_simulate}')
         raise EnvironmentError('No dates to download')
 
@@ -48,7 +48,7 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
         expected_file_name = date_to_file_name(year, month, days)
         downloads.append((year, month, days, expected_file_name))
 
-    if not downloads:  # should already by caught by the previous dates check, this is redundancy
+    if not len(downloads):  # should already by caught by the previous dates check, this is redundancy
         cl.ping('STOPPING', "No era5 data to download")
         raise EnvironmentError('No era5 data to download')
 
@@ -68,16 +68,18 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
                 chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},  # Included to prevent weird slicing behavior and missing data
         ) as ds:
             # cdsapi does not validate that the range of dates you ask for is all available. we need to validate that we got everything we expected
-            if ds['time'].shape[0] == 0:
+            if ds['valid_time'].shape[0] == 0:
+                print(f'valid_time has no entries in file {downloaded_file}')
                 os.remove(downloaded_file)
                 continue
 
             # Make sure that the last timestep is T23:00 (i.e., a full day)
-            if ds.time[-1].values != np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}T23:00'):
+            if ds.valid_time[-1].values != np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}T23:00'):
                 # Remove timesteps until the last full day
                 ds = ds.sel(time=slice(None, np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
                 # If there is no more time, skip this file
-                if len(ds.time) == 0:
+                if len(ds.valid_time) == 0:
+                    print(f'No valid time left in file {downloaded_file} after removing partial days')
                     os.remove(downloaded_file)
                     continue
 
