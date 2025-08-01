@@ -74,9 +74,9 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
                 continue
 
             # Make sure that the last timestep is T23:00 (i.e., a full day)
-            if ds.valid_time[-1].values != np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}T23:00'):
+            if ds.valid_time[-1].values != np.datetime64(f'{ds.valid_time[-1].values.astype("datetime64[D]")}T23:00'):
                 # Remove timesteps until the last full day
-                ds = ds.sel(time=slice(None, np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
+                ds = ds.sel(valid_time=slice(None, np.datetime64(f'{ds.valid_time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
                 # If there is no more time, skip this file
                 if len(ds.valid_time) == 0:
                     print(f'No valid time left in file {downloaded_file} after removing partial days')
@@ -111,6 +111,8 @@ def date_to_file_name(year: int, month: int, days: list[int]) -> str:
 
 
 def retrieve_data(year: int, month: int, days: list[int], file: str, ) -> None:
+    if os.path.exists(file):
+        return
     c = cdsapi.Client()
     c.retrieve(
         'reanalysis-era5-single-levels',
