@@ -45,7 +45,7 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
     for year, month in year_month_combos:
         download_dates = [d for d in date_range if d.year == year and d.month == month]
         days = natsorted([d.day for d in download_dates])
-        expected_file_name = date_to_file_name(year, month, days)
+        expected_file_name = os.path.join(era5_dir, date_to_file_name(year, month, days))
         downloads.append((year, month, days, expected_file_name))
 
     if not len(downloads):  # should already by caught by the previous dates check, this is redundancy
