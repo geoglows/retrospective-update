@@ -17,7 +17,7 @@ class CloudLog():
         """
         Initializes the CloudLog object.
         """
-        self.webhook_post_url = os.getenv('WEBHOOK_URL', webhook_url)
+        self.webhook_post_url = webhook_url if webhook_url else os.getenv('WEBHOOK_URL')
         self.start_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         if self.webhook_post_url is None or self.webhook_post_url == '':

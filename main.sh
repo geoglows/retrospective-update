@@ -65,7 +65,7 @@ fi
 export CDSAPI_RC="/home/ubuntu/.cdsapirc" # Path to the CDS API key file, this exact env variable name is required by the cdsapi package
 
 # run the era5 download script
-python /home/ubuntu/retrospective-update/retrospective-update/download-era5.py
+python /home/ubuntu/retrospective-update/retrospective-update/download_era5.py
 if [ $? -ne 0 ]; then
     echo "Error: Failed to run the ERA5 download script."
     exit 1
