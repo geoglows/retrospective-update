@@ -1,17 +1,15 @@
-name: update
+name: env
 channels:
   - conda-forge
-  - defaults
 dependencies:
-  - aiobotocore
-  - awscli
-  - boto3
+  # syncing to s3 buckets
+  - s5cmd
+  # ERA5 data
   - cdsapi>=0.7.4
+  # routing
   - dask
   - distributed
-  - flox
   - geopandas
-  - qgis
   - h5netcdf
   - matplotlib
   - natsort
@@ -31,4 +29,4 @@ dependencies:
   - xarray
   - zarr=2
   - pip:
-    - river-route>=1.2.2
+      - river-route>=1.2.2
