@@ -135,11 +135,11 @@ def check_zarrs_match(local_zarr_path: str, s3_zarr_path: str, cl: CloudLog) -> 
 
     if not (local_zarr['time'] == s3_zarr['time']).all():
         cl.ping('FAIL', f"Time-arrays-do-not-match-in-{local_zarr_path}")
-        exit()
+        raise EnvironmentError('Time arrays do not match between local and s3 zarrs')
 
     if local_zarr['Q'].shape != s3_zarr['Q'].shape:
-        cl.ping('FAIL', f"Shapes-do-not-match-{local_zarr_path}")
-        exit()
+        cl.ping('FAIL', f"Q-array-shapes-do-not-match-{local_zarr_path}")
+        raise EnvironmentError('Q array shapes do not match between local and s3 zarrs')
 
 
 if __name__ == '__main__':

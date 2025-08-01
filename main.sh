@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # first sleep for 4 minutes to allow for users to cancel the job
-sleep 240
+#sleep 240
 
 # try to activate the conda environment
 source /home/ubuntu/miniconda3/bin/activate
@@ -25,7 +25,7 @@ export HYDROSOS_DIR="$WORK_DIR/hydrosos"
 export DAILY_ZARR="$WORK_DIR/daily.zarr"
 export HOURLY_ZARR="$WORK_DIR/hourly.zarr"
 
-export CONFIGS_DIR="$WORK_DIR/configs"
+export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="s3://geoglows-v2/routing-configs"
 
 export FINAL_STATES_DIR="$WORK_DIR/final-states"
