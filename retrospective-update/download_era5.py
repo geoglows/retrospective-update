@@ -131,7 +131,7 @@ def check_zarrs_match(local_zarr_path: str, s3_zarr_path: str, cl: CloudLog) -> 
     Check that the local zarr matches the s3 zarr.
     """
     local_zarr = xr.open_zarr(local_zarr_path)
-    s3_zarr = xr.open_zarr(s3_zarr_path)
+    s3_zarr = xr.open_zarr(s3_zarr_path, storage_options={'anon': True})
 
     if not (local_zarr['time'] == s3_zarr['time']).all():
         cl.ping('FAIL', f"Time-arrays-do-not-match-in-{local_zarr_path}")

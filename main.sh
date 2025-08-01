@@ -62,7 +62,7 @@ if [ ! -d "$DAILY_ZARR" ] || [ -z "$(ls -A $DAILY_ZARR)" ]; then
     echo "Error: Daily zarr directory is empty or does not exist."
     exit 1
 fi
-export CDSAPI_RC="/home/ubuntu/.cdsapirc" # Path to the CDS API key file, this exact env variable name is required by the cdsapi package
+export CDSAPI_RC="/home/ubuntu/cdsapirc.txt" # Path to the CDS API key file, this exact env variable name is required by the cdsapi package
 
 # run the era5 download script
 python /home/ubuntu/retrospective-update/retrospective-update/download_era5.py

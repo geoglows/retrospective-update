@@ -31,6 +31,7 @@ class CloudLog():
 
     def ping(self, status: str, message: str = None) -> None:
         if not self.webhook_post_url:
+            print(message)
             return
         if 'error' in status.lower():
             message = f"Error:{message}"
