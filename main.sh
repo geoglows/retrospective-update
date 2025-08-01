@@ -73,7 +73,7 @@ if [ $? -ne 0 ]; then
 fi
 
 # run the main python script
-python /home/ubuntu/retrospective-update/retrospective-update/master.py
+python /home/ubuntu/retrospective-update/retrospective-update/route.py
 if [ $? -ne 0 ]; then
     echo "Error: Failed to run the routing script."
     exit 1

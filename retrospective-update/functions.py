@@ -69,7 +69,8 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
         s3_qfinals = [f for f in s3.ls(f'{s3_qfinal_dir}/{vpu}/') if last_retro_time in f]
         local_qfinals = set(glob(os.path.join(outputs_dir, vpu, 'finalstate*.parquet')))
         if not s3_qfinals:
-            raise FileNotFoundError(f"No finalstate files found for {vpu} in S3 at {s3_qfinal_dir} for {last_retro_time}")
+            raise FileNotFoundError(
+                f"No finalstate files found for {vpu} in S3 at {s3_qfinal_dir} for {last_retro_time}")
 
         s3_qfinal = s3_qfinals[0]  # Take the first one, there should only be one
 
@@ -89,7 +90,8 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
     return
 
 
-def route_vpu(config_dir: str, era5_files: list[str], outputs_dir: str, ):
+def route_vpu(args):
+    config_dir, era5_files, outputs_dir = args
     vpu = os.path.basename(config_dir)
     params_file = os.path.join(config_dir, 'routing_parameters.parquet')
     weight_table = os.path.join(config_dir, f'gridweights_ERA5_{vpu}.nc')
@@ -109,7 +111,8 @@ def route_vpu(config_dir: str, era5_files: list[str], outputs_dir: str, ):
     # initial_state_file = natsorted(glob(os.path.join(output_dir, 'finalstate*.parquet')))[-1]
     initial_state_file = f'/data/final-states/{vpu}/finalstate_202507232300.parquet'
     final_state_file = os.path.join('/data/final-states', vpu, f"finalstate_{os.path.basename(initial_state_file)}")
-    output_files = [os.path.join(outputs_dir, os.path.basename(era5_file).replace('era5_', 'Q_')) for era5_file in era5_files]
+    output_files = [os.path.join(output_dir, os.path.basename(era5_file).replace('era5_', 'Q_')) for era5_file in
+                    era5_files]
 
     (
         rr
@@ -117,10 +120,15 @@ def route_vpu(config_dir: str, era5_files: list[str], outputs_dir: str, ):
             routing_params_file=params_file,
             connectivity_file=connectivity_file,
             runoff_depths_file=era5_files,
+            weight_table_file=weight_table,
+            var_t='valid_time',
+            var_x='longitude',
+            var_y='latitude',
             outflow_file=output_files,
             initial_state_file=initial_state_file,
             final_state_file=final_state_file,
             progress_bar=False,
+            log=False,
         )
         .route()
     )
@@ -145,44 +153,35 @@ def concatenate_outputs(outputs_dir: str,
                         daily_zarr_path: str,
                         CL: CloudLog) -> None:
     # Build the week dataset
-    qouts = natsorted(glob(os.path.join(outputs_dir, '*', 'Qout*.nc')))
-    if not qouts:
+    # for each unique start date, sorted in order, open/merge the files from all vpus and append to the zarr
+    vpu_outputs = natsorted(glob(os.path.join(outputs_dir, '*')))
+    unique_outputs = natsorted(glob(os.path.join(vpu_outputs[0], '*')))
+    if not unique_outputs:
         CL.ping('FAIL', f"No-Qout-files-found")
         raise FileNotFoundError(f"No Qout files found in {outputs_dir}")
 
-    with xr.open_zarr(daily_zarr_path) as daily_zarr:
-        with xr.open_mfdataset(
-                qouts,
-                combine='nested',
-                concat_dim='river_id',
-                parallel=True,
-                preprocess=drop_coords
-        ).reindex(river_id=daily_zarr['river_id']) as new_ds:
-            earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
-            latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
-            new_ds = new_ds.round(decimals=3)
-            new_ds = new_ds.where(new_ds['Q'] >= 0.0, 0.0)
+    for unique_output in unique_outputs:
+        discharges = natsorted(glob(os.path.join(outputs_dir, '*', unique_output)))
+        if not len(discharges) == len(vpu_outputs):
+            CL.ping('FAIL', 'Discharge-not-found-for-every-vpu')
+            raise FileNotFoundError(f"Discharge-not-found-for-{unique_output}")
 
-            with xr.open_zarr(hourly_zarr_path) as hourly_zarr:
-                chunks = hourly_zarr.chunks
+            with xr.open_mfdataset(qouts, combine='nested', concat_dim='river_id', parallel=True, ) as new_ds:
+                earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
+                latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
+                new_ds = new_ds.round(decimals=3)
+                new_ds = new_ds.where(new_ds['Q'] >= 0.0, 0.0)
+                # load the dataset into memory from the individual files
+                new_ds.load()
 
-            # Append hourly data first
-            CL.ping('RUNNING', f'Appending-to-hourly-zarr-{earliest_date}-to-{latest_date}')
-            (
-                new_ds
-                .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-                .to_zarr(hourly_zarr_path, mode='a', append_dim='time', consolidated=True)
-            )
+                # Append hourly data first
+                CL.ping('RUNNING', f'Appending-to-hourly-zarr-{earliest_date}-to-{latest_date}')
+                new_ds.to_zarr(hourly_zarr_path, mode='a', append_dim='time', consolidated=True)
 
-            # Append daily data
-            CL.ping('RUNNING', f'Appending-to-daily-zarr-{earliest_date}-to-{latest_date}')
-            new_ds = new_ds.resample(time='1D').mean('time')
-            chunks = daily_zarr.chunks
-            (
-                new_ds
-                .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-                .to_zarr(daily_zarr_path, mode='a', append_dim='time', consolidated=True)
-            )
+                # Append daily data
+                CL.ping('RUNNING', f'Appending-to-daily-zarr-{earliest_date}-to-{latest_date}')
+                new_ds = new_ds.resample(time='1D').mean('time')
+                new_ds.to_zarr(daily_zarr_path, mode='a', append_dim='time', consolidated=True)
     return
 
 
@@ -237,96 +236,8 @@ def sync_local_to_s3(local_hourly_zarr: str,
             f"s5cmd --credentials-file {credentials} sync {zarr}/ {s3_zarr}/",
             shell=True, capture_output=True, text=True,
         )
-        if not result.returncode == 0:
+        if result.returncode != 0:
             CL.ping('FAIL', f"Syncing-{zarr}-to-S3-failed")
-            exit()
+            raise Exception(f"Syncing {zarr} to S3 failed. Error: {result.stderr}")
 
     return
-
-
-def update_monthly_zarrs(hourly_zarr: str,
-                         monthly_timesteps: str,
-                         monthly_timeseries: str,
-                         hydro_sos_dir: str,
-                         credentials: str,
-                         CL: CloudLog) -> None:
-    hourly_ds = xr.open_zarr(hourly_zarr)
-    monthly_steps_ds = xr.open_zarr(monthly_timesteps)
-
-    # Check if there is at least a whole month of data in the daily zarr not in the daily zarr
-    last_hourly_time = hourly_ds['time'][-1].values
-    last_monthly_time = monthly_steps_ds['time'][-1].values
-    next_month = last_monthly_time.astype('datetime64[M]') + np.timedelta64(1, 'M')
-    last_whole_month = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[M]') - np.timedelta64(1, 'M')
-    if last_whole_month >= next_month:
-        CL.ping('RUNNING', f'Updating-monthly-zarrs-{next_month}-to-{last_whole_month}')
-        # Find number of months to add
-        months_ds = hourly_ds.sel(time=slice(next_month, last_whole_month))
-        months_ds = months_ds.resample({'time': 'MS'}).mean()
-
-        # Now chunk and append
-        chunks = monthly_steps_ds.chunks
-        (
-            months_ds
-            .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-            .to_zarr(monthly_timesteps, mode='a', append_dim='time', consolidated=True)
-        )
-
-        # Do the same for timeseries
-        chunks = xr.open_zarr(monthly_timeseries).chunks
-        (
-            months_ds
-            .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-            .to_zarr(monthly_timeseries, mode='a', append_dim='time', consolidated=True)
-        )
-
-        # Update the hydrosos maps
-        date_range = pd.date_range(next_month, last_whole_month, freq='MS', inclusive='left')
-        update_hydrosos_maps(date_range, monthly_timesteps, hydro_sos_dir, credentials, CL)
-
-
-def update_yearly_zarrs(hourly_zarr: str,
-                        annual_timesteps: str,
-                        annual_timeseries: str,
-                        annual_maximums: str,
-                        CL: CloudLog) -> None:
-    hourly_ds = xr.open_zarr(hourly_zarr)
-    annual_steps_ds = xr.open_zarr(annual_timesteps)
-
-    # Check if there is at least a whole year of data in the hourly zarr not in the annual zarr
-    last_hourly_time = hourly_ds['time'][-1].values
-    last_annual_time = annual_steps_ds['time'][-1].values
-    next_year = last_annual_time.astype('datetime64[Y]') + np.timedelta64(1, 'Y')
-    last_whole_year = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[Y]') - np.timedelta64(1, 'Y')
-
-    if last_whole_year >= next_year:
-        CL.ping('RUNNING', f'Updating-yearly-zarrs-{next_year}-to-{last_whole_year}')
-        # Find number of years to add
-        years_ds = hourly_ds.sel(time=slice(next_year, last_whole_year))
-        years_ds = years_ds.resample({'time': 'YS'}).mean()
-
-        # Now chunk and append
-        chunks = annual_steps_ds.chunks
-        (
-            years_ds
-            .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-            .to_zarr(annual_timesteps, mode='a', append_dim='time', consolidated=True)
-        )
-
-        # Do the same for timeseries
-        chunks = xr.open_zarr(annual_timeseries).chunks
-        (
-            years_ds
-            .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-            .to_zarr(annual_timeseries, mode='a', append_dim='time', consolidated=True)
-        )
-
-        # Do the same for maximums
-        years_ds = hourly_ds.sel(time=slice(next_year, last_whole_year))
-        years_ds = years_ds.resample({'time': 'YS'}).max()
-        chunks = xr.open_zarr(annual_maximums).chunks
-        (
-            years_ds
-            .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
-            .to_zarr(annual_maximums, mode='a', append_dim='time', consolidated=True)
-        )

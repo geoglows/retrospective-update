@@ -47,9 +47,9 @@ if __name__ == '__main__':
                 ),
             )
 
-        # CL.ping('RUNNING', 'concatenating-outputs')
-        # f.concatenate_outputs(OUTPUTS_DIR, HOURLY_ZARR, DAILY_ZARR, CL)
-        #
+        CL.ping('RUNNING', 'concatenating-outputs')
+        f.concatenate_outputs(OUTPUTS_DIR, HOURLY_ZARR, DAILY_ZARR, CL)
+
         # CL.ping('RUNNING', 'checking local zarr is good to go')
         # for z in [DAILY_ZARR, HOURLY_ZARR]:
         #     f.verify_concatenated_outputs(z, CL)
