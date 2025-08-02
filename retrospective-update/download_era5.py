@@ -12,7 +12,7 @@ from natsort import natsorted
 from cloud_logger import CloudLog
 
 
-def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time_days: int, cl: CloudLog, ) -> None:
+def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time_days: int) -> None:
     """
     1. determines the last simulated dateø in the daily zarr
     2. determines the list of days needed to download between the last simulation and today minus the lag time
@@ -38,7 +38,6 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
         raise EnvironmentError('No dates to download')
 
     # make a list of unique year and month combinations in the list, in order. CDS API wants single month retrievals
-    cl.ping('RUNNING', "Downloading-era5-data")
     downloads = []
     year_month_combos = {(d.year, d.month) for d in date_range}
     year_month_combos = natsorted(year_month_combos)
@@ -46,26 +45,26 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
         download_dates = [d for d in date_range if d.year == year and d.month == month]
         days = natsorted([d.day for d in download_dates])
         expected_file_name = os.path.join(era5_dir, date_to_file_name(year, month, days))
-        downloads.append((year, month, days, expected_file_name))
+        if not os.path.exists(expected_file_name):
+            downloads.append((year, month, days, expected_file_name))
 
     if not len(downloads):  # should already by caught by the previous dates check, this is redundancy
-        cl.ping('STOPPING', "No era5 data to download")
-        raise EnvironmentError('No era5 data to download')
+        cl.ping('WARNING', "No new ERA5 data need to be downloaded, proceeding to validation")
 
-    cl.ping('DOWNLOADING', "Beginning downloads")
     for year, month, days, file in downloads:
         retrieve_data(year=year, month=month, days=days, file=file)
 
-    cl.ping('PROCESSING', "Processing downloaded era5 files")
+    cl.ping('PROCESSING', "Validating downloaded ERA5")
     downloaded_files = natsorted(glob.glob(os.path.join(era5_dir, '*.nc')))
     if not downloaded_files:
         cl.ping('FINISHED', "No ERA5 files were downloaded")
         return
 
     for downloaded_file in downloaded_files:
-        with xr.open_dataset(
+        with xr.load_dataset(
                 downloaded_file,
-                chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},  # Included to prevent weird slicing behavior and missing data
+                chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'},
+                # Included to prevent weird slicing behavior and missing data
         ) as ds:
             # cdsapi does not validate that the range of dates you ask for is all available. we need to validate that we got everything we expected
             if ds['valid_time'].shape[0] == 0:
@@ -75,13 +74,15 @@ def download_era5(era5_dir: str, daily_zarr: str, hourly_zarr: str, min_lag_time
 
             # Make sure that the last timestep is T23:00 (i.e., a full day)
             if ds.valid_time[-1].values != np.datetime64(f'{ds.valid_time[-1].values.astype("datetime64[D]")}T23:00'):
-                # Remove timesteps until the last full day
-                ds = ds.sel(valid_time=slice(None, np.datetime64(f'{ds.valid_time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
+                # Remove timesteps on partial days
+                ds = ds.sel(valid_time=slice(None, np.datetime64(
+                    f'{ds.valid_time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
                 # If there is no more time, skip this file
                 if len(ds.valid_time) == 0:
                     print(f'No valid time left in file {downloaded_file} after removing partial days')
                     os.remove(downloaded_file)
                     continue
+                ds.to_netcdf(downloaded_file)
 
     downloaded_files = list(natsorted(glob.glob(os.path.join(era5_dir, '*.nc'))))
     if not downloaded_files:
@@ -130,22 +131,6 @@ def retrieve_data(year: int, month: int, days: list[int], file: str, ) -> None:
     )
 
 
-def check_zarrs_match(local_zarr_path: str, s3_zarr_path: str, cl: CloudLog) -> None:
-    """
-    Check that the local zarr matches the s3 zarr.
-    """
-    local_zarr = xr.open_zarr(local_zarr_path)
-    s3_zarr = xr.open_zarr(s3_zarr_path, storage_options={'anon': True})
-
-    if not (local_zarr['time'] == s3_zarr['time']).all():
-        cl.ping('FAIL', f"Time-arrays-do-not-match-in-{local_zarr_path}")
-        raise EnvironmentError('Time arrays do not match between local and s3 zarrs')
-
-    if local_zarr['Q'].shape != s3_zarr['Q'].shape:
-        cl.ping('FAIL', f"Q-array-shapes-do-not-match-{local_zarr_path}")
-        raise EnvironmentError('Q array shapes do not match between local and s3 zarrs')
-
-
 if __name__ == '__main__':
     # Parameters
     MIN_LAG_TIME_DAYS = int(os.getenv('MIN_LAG_TIME_DAYS', 5))
@@ -157,19 +142,14 @@ if __name__ == '__main__':
 
     cl = CloudLog()
     try:
-        # todo where should this be done? should it also be done in the routing step? or do we need a verify step before everything?
-        cl.ping('RUNNING', 'Verifying zarr on s3 matches local zarr')
-        for z, s in zip([DAILY_ZARR, HOURLY_ZARR], [S3_DAILY_ZARR, S3_HOURLY_ZARR]):
-            check_zarrs_match(z, s, cl)
         cl.ping('RUNNING', 'Downloading ERA5 data')
         download_era5(
             era5_dir=ERA5_DIR,
             daily_zarr=DAILY_ZARR,
             hourly_zarr=HOURLY_ZARR,
             min_lag_time_days=MIN_LAG_TIME_DAYS,
-            cl=cl
         )
-        cl.ping('FINISHED', 'ERA5 data downloaded successfully')
+        cl.ping('FINISHED', 'ERA5 data prepared successfully')
         exit(0)
     except Exception as e:
         cl.ping('ERROR', 'An error occurred while downloading ERA5 data')

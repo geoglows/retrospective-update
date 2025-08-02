@@ -15,6 +15,7 @@ dependencies:
   - natsort
   - netcdf4
   - networkx
+  - numcodecs
   - pandas
   - pip
   - psutil

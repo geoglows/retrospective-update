@@ -5,7 +5,7 @@ import warnings
 import requests
 
 
-class CloudLog():
+class CloudLog:
     """
     Posts logging messages to a give webhook URL
     """

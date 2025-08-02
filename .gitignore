@@ -2,3 +2,4 @@
 .cdsapirc
 *__pycache__*
 log.log
+.idea/

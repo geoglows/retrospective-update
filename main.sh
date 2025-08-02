@@ -11,8 +11,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# todo check that the packages are installed
-# we need curl, python, s5cmd, nco
+# check that the necessary packages are installed and in the PATH
+commands=("curl" "python" "s5cmd")
+for cmd in "${commands[@]}"; do
+    if ! command -v $cmd &> /dev/null; then
+        echo "Error: $cmd is not installed or not found in PATH."
+        exit 1
+    fi
+done
 
 # Environment variables
 export WEBHOOK_URL=""
@@ -29,8 +35,13 @@ export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="s3://geoglows-v2/routing-configs"
 
 export FINAL_STATES_DIR="$WORK_DIR/final-states"
-export S3_FINAL_STATES_DIR="s3://geoglows-v2/retrospective/final-states"
+export S3_FINAL_STATES_DIR="s3://geoglows-v2/retrospective/TEST-final-states"
 
+export FORECAST_INITS_DIR="$WORK_DIR/forecast-inits"
+export S3_FORECAST_INITS_DIR="s3://geoglows-v2/retrospective/TEST-forcast-inits"
+
+export HOURLY_STEP_ZARR="$WORK_DIR/hourly-steps.zarr"
+export DAILY_STEP_ZARR="$WORK_DIR/daily-steps.zarr"
 export HOURLY_ZARR="$WORK_DIR/hourly.zarr"
 export DAILY_ZARR="$WORK_DIR/daily.zarr"
 export S3_HOURLY_ZARR="s3://geoglows-v2/retrospective/hourly.zarr"
@@ -47,39 +58,55 @@ mkdir -p $WORK_DIR
 mkdir -p $OUTPUTS_DIR
 mkdir -p $ERA5_DIR
 mkdir -p $FINAL_STATES_DIR
+# make sure directory remains editable
+chmod -R 777 $OUTPUTS_DIR
+chmod -R 777 $ERA5_DIR
+chmod -R 777 $FINAL_STATES_DIR
 
-# todo check that the cdsapi file exists and that there are aws credentials and defaults set
-# todo create and run a prepare step
+export CDSAPI_RC="/home/ubuntu/cdsapirc.txt" # Path to the CDS API key, must use exactly the env variable name
+export AWS_CREDENTIALS_FILE="/home/ubuntu/awscredentials"
 # check that the configs directory and both local zarrs exist and are not empty
 if [ ! -d "$CONFIGS_DIR" ] || [ -z "$(ls -A $CONFIGS_DIR)" ]; then
     echo "Error: Configs directory is empty or does not exist."
-    exit 1
+    s5cmd --no-sign-request sync S3_CONFIGS_DIR CONFIGS_DIR
 fi
-if [ ! -d "$HOURLY_ZARR" ] || [ -z "$(ls -A $HOURLY_ZARR)" ]; then
-    echo "Error: Hourly zarr directory is empty or does not exist."
-    exit 1
+if [ ! -d "$HOURLY_ZARR" ]; then
+    echo "Hourly zarr directory is empty or does not exist. Downloading a copy."
+    s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_HOURLY_ZARR/*" $HOURLY_ZARR
 fi
-if [ ! -d "$DAILY_ZARR" ] || [ -z "$(ls -A $DAILY_ZARR)" ]; then
-    echo "Error: Daily zarr directory is empty or does not exist."
-    exit 1
+if [ ! -d "$DAILY_ZARR" ]; then
+    echo "Daily zarr directory is empty or does not exist. Downloading a copy."
+    s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_DAILY_ZARR/*" $DAILY_ZARR
 fi
-export CDSAPI_RC="/home/ubuntu/cdsapirc.txt" # Path to the CDS API key file, this exact env variable name is required by the cdsapi package
 
-# run the era5 download script
+# run a setup/preparation/validation check
+python /home/ubuntu/retrospective-update/retrospective-update/prepare.py
+if [ $? -ne 0 ]; then
+    echo "Error identified when preparing for computations."
+    exit 1
+fi
+
+# era5 download script
 python /home/ubuntu/retrospective-update/retrospective-update/download_era5.py
 if [ $? -ne 0 ]; then
     echo "Error: Failed to run the ERA5 download script."
     exit 1
 fi
 
-# run the main python script
+# routing script
 python /home/ubuntu/retrospective-update/retrospective-update/route.py
 if [ $? -ne 0 ]; then
     echo "Error: Failed to run the routing script."
+    rm -r $OUTPUTS_DIR
     exit 1
 fi
 
-# empty the outputs and era5 directories
-#rm -r $OUTPUTS_DIR/*
-#rm -r $ERA5_DIR/*
-#rm -r $HYDROSOS_DIR/*
+# synchronize inits to s3
+s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$FINAL_STATES_DIR/*" $S3_FINAL_STATES_DIR/
+s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$FORECAST_INITS_DIR/*" $S3_FORECAST_INITS_DIR/
+
+# clean up the intermediate data
+rm -r $OUTPUTS_DIR
+rm -r $ERA5_DIR
+
+# todo append timesteps zarr to timeseries zarr and sync to s3
