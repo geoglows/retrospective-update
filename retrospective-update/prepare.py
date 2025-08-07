@@ -1,3 +1,4 @@
+import os
 import subprocess
 import traceback
 from glob import glob
@@ -7,7 +8,9 @@ import xarray as xr
 from natsort import natsorted
 
 from cloud_logger import CloudLog
-from set_env_variables import *
+from set_env_variables import (
+    DAILY_ZARR, FINAL_STATES_DIR, HOURLY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, S3_FINAL_STATES_DIR, CONFIGS_DIR
+)
 
 
 def check_local_zarrs_match_s3(local_zarr_path: str, s3_zarr_path: str) -> None:

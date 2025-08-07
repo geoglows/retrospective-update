@@ -24,7 +24,6 @@ dependencies:
   - python
   - requests
   - s3fs
-  - s5cmd
   - scipy
   - tqdm
   - xarray

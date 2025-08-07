@@ -1,3 +1,4 @@
+import os
 import traceback
 from glob import glob
 
@@ -6,7 +7,9 @@ import xarray as xr
 from natsort import natsorted
 
 from cloud_logger import CloudLog
-from set_env_variables import *
+from set_env_variables import (
+    DAILY_ZARR, HOURLY_ZARR, OUTPUTS_DIR
+)
 
 
 def concatenate_outputs() -> None:

@@ -1,3 +1,4 @@
+import os
 import traceback
 from datetime import datetime
 from glob import glob
@@ -12,7 +13,9 @@ from netCDF4 import Dataset, date2num
 from tqdm import tqdm
 
 from cloud_logger import CloudLog
-from set_env_variables import *
+from set_env_variables import (
+    FINAL_STATES_DIR, CONFIGS_DIR, OUTPUTS_DIR, FORECAST_INITS_DIR, ERA5_DIR, HOURLY_ZARR
+)
 
 
 def route_vpu(args):

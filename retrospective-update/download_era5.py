@@ -1,4 +1,5 @@
 import glob
+import os
 import traceback
 from datetime import datetime
 
@@ -10,7 +11,9 @@ from dateutil import relativedelta
 from natsort import natsorted
 
 from cloud_logger import CloudLog
-from set_env_variables import *
+from set_env_variables import (
+    HOURLY_ZARR, ERA5_DIR, MIN_LAG_TIME_DAYS
+)
 
 
 def download_era5() -> None:
