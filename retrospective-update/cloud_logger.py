@@ -39,7 +39,8 @@ class CloudLog:
             response = requests.post(
                 self.webhook_post_url,
                 headers={"Content-Type": "application/json"},
-                json=message_json
+                json=message_json,
+                timeout=10
             )
 
             if response.status_code != 200:
