@@ -1,10 +1,8 @@
-import os
 import traceback
 from datetime import datetime
 from glob import glob
 from multiprocessing import Pool
 
-import numcodecs
 import numpy as np
 import pandas as pd
 import river_route as rr
@@ -14,34 +12,7 @@ from netCDF4 import Dataset, date2num
 from tqdm import tqdm
 
 from cloud_logger import CloudLog
-
-# Parameters
-MIN_LAG_TIME_DAYS = int(os.getenv('MIN_LAG_TIME_DAYS', 5))
-
-DATA_DIR = os.getenv('WORK_DIR')
-ERA5_DIR = os.getenv('ERA5_DIR')
-CONFIGS_DIR = os.getenv('CONFIGS_DIR')
-OUTPUTS_DIR = os.getenv('OUTPUTS_DIR')
-HYDROSOS_DIR = os.getenv('HYDROSOS_DIR')
-
-FINAL_STATES_DIR = os.getenv('FINAL_STATES_DIR')
-FORECAST_INITS_DIR = os.getenv('FORECAST_INITS_DIR')
-
-HOURLY_STEP_ZARR = os.getenv('HOURLY_STEP_ZARR')
-DAILY_STEP_ZARR = os.getenv('DAILY_STEP_ZARR')
-
-DAILY_ZARR = os.getenv('DAILY_ZARR')
-HOURLY_ZARR = os.getenv('HOURLY_ZARR')
-S3_DAILY_ZARR = os.getenv('S3_DAILY_ZARR')
-S3_HOURLY_ZARR = os.getenv('S3_HOURLY_ZARR')
-
-S3_CONFIGS_DIR = os.getenv('S3_CONFIGS_DIR')
-S3_QFINAL_DIR = os.getenv('S3_QFINAL_DIR')
-S3_MONTHLY_TIMESTEPS = os.getenv('S3_MONTHLY_TIMESTEPS')
-S3_MONTHLY_TIMESERIES = os.getenv('S3_MONTHLY_TIMESERIES')
-S3_ANNUAL_TIMESTEPS = os.getenv('S3_ANNUAL_TIMESTEPS')
-S3_ANNUAL_TIMESERIES = os.getenv('S3_ANNUAL_TIMESERIES')
-S3_ANNUAL_MAXIMUMS = os.getenv('S3_ANNUAL_MAXIMUMS')
+from set_env_variables import *
 
 
 def route_vpu(args):
@@ -69,7 +40,7 @@ def route_vpu(args):
         os.path.join(outdir, os.path.basename(era5_file).replace('era5_', 'Q_')) for era5_file in era5_files
     ]
 
-    if os.path.exists(final_state_file):  # final state is the last thing to be made so we only need to look for this
+    if os.path.exists(final_state_file):
         return
 
     (
@@ -106,90 +77,6 @@ def drop_coords(ds: xr.Dataset, qout: str = 'Q'):
     return ds[[qout, ]].reset_coords(drop=True)
 
 
-def concatenate_outputs() -> None:
-    # Build the week dataset
-    # for each unique start date, sorted in order, open/merge the files from all vpus and append to the zarr
-    vpu_outputs = natsorted(glob(os.path.join(OUTPUTS_DIR, '*')))
-    unique_outputs = [os.path.basename(f) for f in natsorted(glob(os.path.join(vpu_outputs[0], '*')))]
-    if not unique_outputs:
-        cl.ping('FAIL', f"No-Qout-files-found")
-        raise FileNotFoundError(f"No Qout files found in {OUTPUTS_DIR}")
-
-    for unique_output in unique_outputs:
-        discharges = list(natsorted(glob(os.path.join(OUTPUTS_DIR, '*', unique_output))))
-        if not len(discharges) == len(vpu_outputs):
-            cl.ping('FAIL', 'Discharge-not-found-for-every-vpu')
-            raise FileNotFoundError(f"Discharge-not-found-for-{unique_output}")
-
-        with xr.open_mfdataset(discharges, combine='nested', concat_dim='river_id', parallel=True, ) as new_ds:
-            earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
-            latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
-            # QA/QC which should already have been done by river-route
-            new_ds = new_ds.round(decimals=3)
-            new_ds = new_ds.where(new_ds['Q'] >= 0.0, 0.0)
-            # load the dataset into memory from the individual files
-            new_ds.load()
-            encoding = {
-                'Q': {
-                    'dtype': 'float32',
-                    'compressor': numcodecs.Blosc(cname='zstd', clevel=3, shuffle=numcodecs.Blosc.BITSHUFFLE),
-                }
-            }
-
-            # check that the time steps are not already
-            hourly_step_times = xr.open_zarr(HOURLY_STEP_ZARR).time.values
-            if new_ds.time.values[0] in hourly_step_times:
-                cl.ping('Error', f'hourly steps already present for {earliest_date} to {latest_date}')
-                raise RuntimeError(f'Hourly steps already present for {earliest_date} to {latest_date}. This requires human intervention to resolve.')
-            else:
-                cl.ping('RUNNING', f'Writing-hourly-time-stepped-zarr-{earliest_date}-to-{latest_date}')
-                if os.path.isdir(HOURLY_STEP_ZARR):
-                    new_ds.to_zarr(HOURLY_STEP_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
-                else:
-                    (
-                        new_ds
-                        .chunk({'time': 24, 'river_id': 20_000})
-                        .to_zarr(HOURLY_STEP_ZARR, mode='w', consolidated=True, zarr_format=2, encoding=encoding)
-                    )
-
-            # Append daily data
-            new_ds = new_ds.resample(time='1D').mean('time')
-            daily_step_time = xr.open_zarr(DAILY_STEP_ZARR).time.values
-            if new_ds.time.values[0] in daily_step_time:
-                cl.ping('Error', f'daily steps already present for {earliest_date} to {latest_date}')
-                raise RuntimeError(f'Daily steps already present for {earliest_date} to {latest_date}. This requires human intervention to resolve.')
-            else:
-                cl.ping('RUNNING', f'Writing-daily-to-time-stepped-zarr-{earliest_date}-to-{latest_date}')
-                if os.path.isdir(DAILY_STEP_ZARR):
-                    new_ds.to_zarr(DAILY_STEP_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
-                else:
-                    (
-                        new_ds
-                        .chunk({'time': 1, 'river_id': 20_000})
-                        .to_zarr(DAILY_STEP_ZARR, mode='w', consolidated=True, zarr_format=2, encoding=encoding)
-                    )
-
-    return
-
-
-def verify_concatenated_outputs(zarr: str, cl: CloudLog) -> None:
-    """
-    Verifies that the concatenated outputs are correct
-    """
-    with xr.open_zarr(zarr) as ds:
-        time_size = ds.chunks['time'][0]
-        # Test a river to see if there are nans
-        if np.isnan(ds.isel(river_id=1, time=slice(time_size, -1))['Q'].values).any():
-            cl.ping('FAIL', f'{zarr}-contain-nans')
-            exit()
-
-        # Verify that the time dimension is correct
-        times = ds['time'].values
-        if not np.all(np.diff(times) == times[1] - times[0]):
-            cl.ping('FAIL', f'Time-dimension-of-{zarr}-is-incorrect')
-            exit()
-
-
 def make_rapid_style_inits(args) -> None:
     vpu, final_timestamp = args
     date_value = datetime.strptime(final_timestamp, '%Y%m%d%H%M')
@@ -200,17 +87,9 @@ def make_rapid_style_inits(args) -> None:
     rivid = pd.read_parquet(config_file)["river_id"].values.astype(np.int32)
     lat = np.zeros_like(rivid, dtype=np.float64)
     lon = np.zeros_like(rivid, dtype=np.float64)
-    print('about to read qinit')
-    print(FINAL_STATES_DIR)
-    print(os.path.basename(vpu))
-    print(os.path.join(FINAL_STATES_DIR, os.path.basename(vpu), f'finalstate_{final_timestamp}.parquet'))
-    qinit = pd.read_parquet(
-        os.path.join(
-            FINAL_STATES_DIR, os.path.basename(vpu), f'finalstate_{final_timestamp}.parquet'
-        )
-    )["Q"].values
-    print('just read qinit')
-    # Ensure qinit has no negative values
+
+    expected_qinit_file = os.path.join(FINAL_STATES_DIR, os.path.basename(vpu), f'finalstate_{final_timestamp}.parquet')
+    qinit = pd.read_parquet(expected_qinit_file)["Q"].values
     qinit[qinit < 0] = 0
 
     # Time info
@@ -225,8 +104,8 @@ def make_rapid_style_inits(args) -> None:
         vpu.split("=")[-1]
     )
     os.makedirs(output_basedir, exist_ok=True)
-    output_full_name = os.path.join(output_basedir, f"Qinit_{date_value.strftime('%Y%m%d00')}.nc")
-    with Dataset(output_full_name, "w", format="NETCDF4") as nc:
+    output_full_path = os.path.join(output_basedir, f"Qinit_{date_value.strftime('%Y%m%d00')}.nc")
+    with Dataset(output_full_path, "w", format="NETCDF4") as nc:
         nc.Conventions = "CF-1.6"
         nc.featureType = "timeSeries"
 
@@ -292,12 +171,12 @@ if __name__ == '__main__':
         init_timestamp_era5 = pd.to_datetime(xr.open_dataset(era5_data[0]).valid_time[0].values) - pd.Timedelta(hours=1)
         init_timestamp_era5 = init_timestamp_era5.strftime('%Y%m%d%H%M')
         if init_timestamp != init_timestamp_era5:
-            cl.ping('ERROR', 'Last time step in the zarr timeseries is different than the first era5')
+            cl.error('Last time step in the zarr timeseries is different than the first era5')
+            raise RuntimeError('Last time step in the zarr timeseries is different than the first era5')
         vpus = natsorted(glob(os.path.join(CONFIGS_DIR, '*')))
 
-        cl.ping('RUNNING', f'routing')
         with Pool(os.cpu_count()) as p:
-            cl.ping('RUNNING', 'Running-river-route')
+            cl.log('Routing')
             list(
                 tqdm(
                     p.imap_unordered(route_vpu, [(vpu, era5_data, init_timestamp, final_timestamp) for vpu in vpus]),
@@ -305,24 +184,15 @@ if __name__ == '__main__':
                 ),
             )
 
-            cl.ping('RUNNING', 'concatenating-outputs')
-            concatenate_outputs()
-
-            cl.ping('RUNNING', 'checking local zarr is good to go')
-            for z in [DAILY_ZARR, HOURLY_ZARR]:
-                verify_concatenated_outputs(z, cl)
-
-            cl.ping('RUNNING', 'making-forecast-inits-from-retrospective-final-states')
+            cl.log('Making Forecast Inits')
             list(
                 tqdm(
                     p.imap_unordered(make_rapid_style_inits, [(vpu, final_timestamp) for vpu in vpus]),
                     total=len(vpus), desc='Making forecast inits'
                 )
             )
-
-        cl.ping('COMPLETE', "Retrospective-update-complete")
         exit(0)
     except Exception as e:
-        error = traceback.format_exc()
-        cl.ping('FAIL', str(e))
+        cl.error(e)
+        print(traceback.format_exc())
         exit(1)

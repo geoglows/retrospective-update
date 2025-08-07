@@ -30,4 +30,4 @@ dependencies:
   - xarray
   - zarr=2
   - pip:
-      - river-route>=1.2.2
+      - river-route=1.3.0

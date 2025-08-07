@@ -22,36 +22,34 @@ done
 
 # Environment variables
 export WEBHOOK_URL=""
-
 export WORK_DIR="/data"
+export S3_BASE_URI="s3://geoglows-v2"
+export CDSAPI_RC="/home/ubuntu/cdsapirc.txt"
+export AWS_CREDENTIALS_FILE="/home/ubuntu/awscredentials"
+
 export OUTPUTS_DIR="$WORK_DIR/discharge"
 export ERA5_DIR="$WORK_DIR/era5"
 export HYDROSOS_DIR="$WORK_DIR/hydrosos"
 
-export DAILY_ZARR="$WORK_DIR/daily.zarr"
-export HOURLY_ZARR="$WORK_DIR/hourly.zarr"
-
 export CONFIGS_DIR="$WORK_DIR/routing-configs"
-export S3_CONFIGS_DIR="s3://geoglows-v2/routing-configs"
+export S3_CONFIGS_DIR="$S3_BASE_URI/routing-configs"
 
 export FINAL_STATES_DIR="$WORK_DIR/final-states"
-export S3_FINAL_STATES_DIR="s3://geoglows-v2/retrospective/TEST-final-states"
+export S3_FINAL_STATES_DIR="$S3_BASE_URI/retrospective/final-states"
 
 export FORECAST_INITS_DIR="$WORK_DIR/forecast-inits"
-export S3_FORECAST_INITS_DIR="s3://geoglows-v2/retrospective/TEST-forcast-inits"
+export S3_FORECAST_INITS_DIR="$S3_BASE_URI/retrospective/forcast-inits"
 
-export HOURLY_STEP_ZARR="$WORK_DIR/hourly-steps.zarr"
-export DAILY_STEP_ZARR="$WORK_DIR/daily-steps.zarr"
 export HOURLY_ZARR="$WORK_DIR/hourly.zarr"
 export DAILY_ZARR="$WORK_DIR/daily.zarr"
-export S3_HOURLY_ZARR="s3://geoglows-v2/retrospective/hourly.zarr"
-export S3_DAILY_ZARR="s3://geoglows-v2/retrospective/daily.zarr"
+export S3_HOURLY_ZARR="$S3_BASE_URI/retrospective/hourly.zarr"
+export S3_DAILY_ZARR="$S3_BASE_URI/retrospective/daily.zarr"
 
-export S3_MONTHLY_TIMESERIES="s3://geoglows-v2/retrospective/monthly-timeseries.zarr"
-export S3_MONTHLY_TIMESTEPS="s3://geoglows-v2/retrospective/monthly-timesteps.zarr"
-export S3_ANNUAL_TIMESERIES="s3://geoglows-v2/retrospective/annual-timeseries.zarr"
-export S3_ANNUAL_TIMESTEPS="s3://geoglows-v2/retrospective/annual-timesteps.zarr"
-export S3_ANNUAL_MAXIMUMS="s3://geoglows-v2/retrospective/annual-maximums.zarr"
+export S3_MONTHLY_TIMESERIES="$S3_BASE_URI/retrospective/monthly-timeseries.zarr"
+export S3_MONTHLY_TIMESTEPS="$S3_BASE_URI/retrospective/monthly-timesteps.zarr"
+export S3_ANNUAL_TIMESERIES="$S3_BASE_URI/retrospective/annual-timeseries.zarr"
+export S3_ANNUAL_TIMESTEPS="$S3_BASE_URI/retrospective/annual-timesteps.zarr"
+export S3_ANNUAL_MAXIMUMS="$S3_BASE_URI/retrospective/annual-maximums.zarr"
 
 # prepare directory structure
 mkdir -p $WORK_DIR
@@ -63,12 +61,10 @@ chmod -R 777 $OUTPUTS_DIR
 chmod -R 777 $ERA5_DIR
 chmod -R 777 $FINAL_STATES_DIR
 
-export CDSAPI_RC="/home/ubuntu/cdsapirc.txt" # Path to the CDS API key, must use exactly the env variable name
-export AWS_CREDENTIALS_FILE="/home/ubuntu/awscredentials"
 # check that the configs directory and both local zarrs exist and are not empty
 if [ ! -d "$CONFIGS_DIR" ] || [ -z "$(ls -A $CONFIGS_DIR)" ]; then
     echo "Error: Configs directory is empty or does not exist."
-    s5cmd --no-sign-request sync S3_CONFIGS_DIR CONFIGS_DIR
+    s5cmd --no-sign-request sync "$S3_CONFIGS_DIR/*" $CONFIGS_DIR
 fi
 if [ ! -d "$HOURLY_ZARR" ]; then
     echo "Hourly zarr directory is empty or does not exist. Downloading a copy."
@@ -105,8 +101,17 @@ fi
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$FINAL_STATES_DIR/*" $S3_FINAL_STATES_DIR/
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$FORECAST_INITS_DIR/*" $S3_FORECAST_INITS_DIR/
 
-# clean up the intermediate data
+# append the discharge to zarrs
+python /home/ubuntu/retrospective-update/retrospective-update/append_discharge.py
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to run the appending script."
+  exit 1
+fi
+
+# clean up any existing data that shouldn't be there anymore
 rm -r $OUTPUTS_DIR
 rm -r $ERA5_DIR
 
-# todo append timesteps zarr to timeseries zarr and sync to s3
+# sync to s3
+s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HOURLY_ZARR/*" $S3_HOURLY_ZARR/
+s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$DAILY_ZARR/*" $S3_DAILY_ZARR/
