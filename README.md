@@ -76,5 +76,3 @@ You may test your lambda function to ensure that every step of this process succ
 1. Go to the Lamda function you created in the previous step. Click the "Add trigger" button.
 2. Select "Eventbridge" from the dropdown. Select "Create a new rule". Select "Schedule expression". Enter a cron expression (for example, to set the lambda function to go off at 12:00 AM every Sunday, enter `cron(0 0 ? * SUN *)`).
 3. Hit "Add"  and you're done!
-
-
