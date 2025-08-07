@@ -1,25 +1,53 @@
 import os
+import sys
 import glob
+import shutil
 import logging
-import natsort
+import warnings
 import subprocess
 from queue import Queue
 from threading import Thread
 from datetime import datetime
+from multiprocessing.pool import Pool
 
-import s3fs
+os.environ["QT_QPA_PLATFORM"] = "offscreen" # Do before importing QGIS
+
 import tqdm
+import s3fs
 import cdsapi
 import psutil
+import natsort
+import processing
 import numpy as np
 import pandas as pd
 import xarray as xr
+import geopandas as gpd
 import river_route as rr
-from natsort import natsorted
+from qgis.core import (
+    QgsSymbol,
+    QgsProject,
+    QgsApplication,
+    QgsVectorLayer,
+    QgsRendererCategory,
+    QgsCategorizedSymbolRenderer
+)
+from qgis.PyQt.QtGui import QColor
 
 from cloud_logger import CloudLog
 
 storage_options={'profile':'odp'}
+
+HYDROBASINS_FILE = os.getenv('HYDROBASINS_COMBINED')
+HYBASID_TO_LINKNO_CSV = os.getenv('HYBASID_TO_LINKNO_CSV')
+UNIQUE_HYBASIDS_CSV = os.getenv('UNIQUE_HYBASIDS_CSV')
+DUPLICATED_HYBASIDS_CSV = os.getenv('DUPLICATED_HYBASIDS_CSV')
+FLOW_CUTOFF_NC = os.getenv('FLOW_CUTOFF_NC')
+FLOW_CUTOFF_NC_BY_HYBASID = os.getenv('FLOW_CUTOFF_NC_BY_HYBASID')
+
+S3_HYDROSOS_DIR = os.getenv('S3_HYDROSOS_DIR')
+
+# Filter all deprecation warnings from botocore
+warnings.filterwarnings("ignore", category=DeprecationWarning, module='botocore')
 
 class DownloadWorker(Thread):
     """
@@ -45,7 +73,6 @@ class DownloadWorker(Thread):
             client, era_dir, year, month, days = self.queue.get()
             try:
                 retrieve_data(client, era_dir, year, month, days)
-                # ...
             finally:
                 self.queue.task_done()
 
@@ -79,8 +106,8 @@ def download_era5(era_dir: str,
 
     if pd.to_datetime(last_date + np.timedelta64(min_lag_time_days, 'D')) > datetime.now():
         # If the last date in the zarr file is within min_lag_time_days of today then exit
-        CL.log_message(f'{last_date} is within {min_lag_time_days} days of today. Not running')
-        return
+        CL.ping('STOPPING', f'{last_date}-is-within-{min_lag_time_days}-days-of-today.-Stopping')
+        exit()
 
     date_range = pd.date_range(start=last_date + pd.DateOffset(days=1),
                                end=today - pd.DateOffset(days=min_lag_time_days),
@@ -88,31 +115,13 @@ def download_era5(era_dir: str,
     logging.info(date_range[0])
     logging.info(date_range[-1])
     CL.add_time_period(date_range.tolist())
-    CL.log_message('RUNNING', "Beginning download")
+    CL.ping('RUNNING', "Downloading-era5-data")
 
     # make a list of unique year and month combinations in the list
     download_requests = []
     year_month_combos = {(d.year, d.month) for d in date_range}
     # sort by year and month
-    year_month_combos = natsorted(year_month_combos)
-
-
-    year_1 = year_month_combos[0][0]
-    month_1 = year_month_combos[0][1]
-    if len(year_month_combos) > 1:
-        year_2 = year_month_combos[-1][0]
-        month_2 = year_month_combos[-1][1]
-    else:
-        year_2 = year_1
-        month_2 = month_1
-    day_1 = min({d.day for d in date_range if d.year == year_1 and d.month == month_1})
-    day_2 = max({d.day for d in date_range if d.year == year_2 and d.month == month_2})
-    hourly_cumulative_file_name = f'era5_{year_1}{str(month_1).zfill(2)}{str(day_1).zfill(2)}-{year_2}{str(month_2).zfill(2)}{str(day_2).zfill(2)}_daily_cumulative.nc'
-    hourly_cumulative_file_name = os.path.join(runoff_dir, hourly_cumulative_file_name)
-
-    if os.path.exists(hourly_cumulative_file_name):
-        logging.info(f'{hourly_cumulative_file_name} already exists locally')
-        return
+    year_month_combos = natsort.natsorted(year_month_combos)
     
     logging.info(year_month_combos)
     for year, month in year_month_combos:
@@ -120,7 +129,7 @@ def download_era5(era_dir: str,
         days = [d.day for d in download_dates]
         expected_file_name = date_to_file_name(year, month, days)
         # if we already have the file locally, skip
-        if os.path.exists(os.path.join(era_dir, expected_file_name)):
+        if os.path.exists(os.path.join(era_dir, expected_file_name)) or os.path.exists(os.path.join(runoff_dir, expected_file_name)):
             logging.info(f'{expected_file_name} already exists locally')
             continue
 
@@ -141,26 +150,33 @@ def download_era5(era_dir: str,
 
 
     CL.log_message('PROCESSING', "Processing downloaded era5 files")
-    downloaded_files = natsorted(glob.glob(os.path.join(era_dir, '*.nc')))
+    downloaded_files = natsort.natsorted(glob.glob(os.path.join(era_dir, '*.nc')))
     if not downloaded_files:
         CL.log_message('FINISHED', "No files were downloaded")
         return
     
-    with xr.open_mfdataset(downloaded_files,
-                           concat_dim='time', 
-                           combine='nested', 
-                           parallel=True, 
-                           chunks = {'time':'auto', 'lat':'auto','lon':'auto'}, # Included to prevent weird slicing behavior and missing data
-                           preprocess=handle_valid_time
-                           ) as ds:
-        logging.info(f'processing {", ".join(downloaded_files)}')
+    for f in downloaded_files:
+        output_file = os.path.join(runoff_dir, os.path.basename(f))
+        if os.path.exists(output_file):
+            logging.info(f'{output_file} already exists')
+            continue
+
+        with xr.open_mfdataset(f,
+                            concat_dim='time', 
+                            combine='nested', 
+                            parallel=True, 
+                            chunks = {'time':'auto', 'lat':'auto','lon':'auto'}, # Included to prevent weird slicing behavior and missing data
+                            preprocess=handle_valid_time
+                            ) as ds:
+            logging.info(f'processing {f}')
 
 
-        if ds['time'].shape[0] == 0:
-            logging.info(f'No time steps were downloaded- the shape of the time array is 0.')
-            logging.info(f'Removing {", ".join(downloaded_files)}')
-            {os.remove(downloaded_file) for downloaded_file in downloaded_files}
-        else:
+            if ds['time'].shape[0] == 0:
+                logging.info(f'No time steps were downloaded- the shape of the time array is 0.')
+                logging.info(f'Removing {", ".join(downloaded_files)}')
+                {os.remove(downloaded_file) for downloaded_file in downloaded_files}
+                continue
+            
             if 'expver' in ds.dims:
                 logging.info('expver in dims')
                 # find the time steps where the runoff is not nan when expver=1
@@ -190,7 +206,16 @@ def download_era5(era_dir: str,
                 # Remove it to avoid warning when saving
                 ds = ds.drop_vars('expver')
             
-            ds.to_netcdf(hourly_cumulative_file_name)
+            # Make sure that the last timestep is T23:00 (i.e., a full day)
+            if ds.time[-1].values != np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}T23:00'):
+                # Remove timesteps until the last full day
+                ds = ds.sel(time=slice(None, np.datetime64(f'{ds.time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
+
+                # If there is no more time, skip this file
+                if len(ds.time) == 0:
+                    continue
+
+            ds.to_netcdf(output_file)
 
     # Now remove the downloaded files
     {os.remove(downloaded_file) for downloaded_file in downloaded_files}
@@ -281,11 +306,6 @@ def check_installations(daily_zarr: str,
         subprocess.run(['s5cmd', 'version'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except Exception as e:
         raise RuntimeError('Please install s5cmd: `conda install -c conda-forge s5cmd`')
-    
-    # try:
-    #     x = subprocess.run(f's5cmd --profile odp ls {s3_daily_zarr}'.split(), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # except Exception as e:
-    #     raise FileNotFoundError(f'{s3_daily_zarr} does not exist')
 
     if not os.path.exists(daily_zarr):
         logging.info(f'Downloading {s3_daily_zarr}')
@@ -295,70 +315,40 @@ def check_installations(daily_zarr: str,
         logging.info(f'Downloading {s3_hourly_zarr}')
         get_local_copy(s3_hourly_zarr, hourly_zarr, credentials)
 
-def check_zarrs_match(local_zarr: str, s3_zarr: str):
+def check_zarrs_match(local_zarr_path: str, s3_zarr_path: str, CL: CloudLog) -> None:
     """
     Check that the local zarr matches the s3 zarr.
     """
-    local_zarr = xr.open_zarr(local_zarr)
-    s3_zarr = xr.open_zarr(s3_zarr, storage_options=storage_options)
+    local_zarr = xr.open_zarr(local_zarr_path)
+    s3_zarr = xr.open_zarr(s3_zarr_path, storage_options=storage_options)
 
-    assert (local_zarr['time'] == s3_zarr['time']).all(), "Time arrays do not match"
-    assert local_zarr['Q'].shape == s3_zarr['Q'].shape, "Shapes do not match"
+    if not (local_zarr['time'] == s3_zarr['time']).all():
+        CL.ping('FAIL', f"Time-arrays-do-not-match-in-{local_zarr_path}")
+        exit()
+
+    if local_zarr['Q'].shape != s3_zarr['Q'].shape:
+        CL.ping('FAIL', f"Shapes-do-not-match-{local_zarr_path}")
+        exit()
+
 
 def setup_configs(configs_dir: str,
-                  credentials: str,
-                  CL: CloudLog) -> None:
+                  s3_configs_dir: str,
+                  CL: CloudLog,) -> None:
     """
     Setup all the directories we need, populate files
     """
+    
     os.makedirs(configs_dir, exist_ok=True)
-    if len(glob.glob(os.path.join(configs_dir, '*', '*.parquet'))) == 0:
-        result = subprocess.run(f"aws s3 sync {credentials} {configs_dir}", shell=True, capture_output=True,
+    if len(glob.glob(os.path.join(configs_dir, '*', '*.csv'))) == 0:
+        result = subprocess.run(f"s5cmd sync {s3_configs_dir}/* {configs_dir}", shell=True, capture_output=True,
                                 text=True)
         if result.returncode == 0:
-            logging.info("Obtained config files")
+            CL.log_message('RUNNING', "Obtained configs from S3")
         else:
-            logging.error(f"Config file sync error: {result.stderr}")
-            CL.log_message('FAIL', f"Config file sync error: {result.stderr}")
-            exit()
-
-def cleanup(home: str,
-            runoff_dir: str,
-            inflows_dir: str,
-            outputs_dir: str,
-            configs_dir: str,) -> None:
-    """
-    Cleans up the working directory by deleting namelists, inflow files, and
-    caching qfinals and qouts.
-    """
-    # change the owner of the data directory and all sub files and directories to the user
-    os.system(f'sudo chown -R $USER:$USER {home}/data')
-
-    # delete runoff data
-    logging.info('Deleting runoff data')
-    if runoff_dir:
-        for file in glob.glob(os.path.join(runoff_dir, '*')):
-            os.remove(file)
-
-    # delete inflow files
-    logging.info('Deleting inflow files')
-    for file in glob.glob(os.path.join(inflows_dir, '*', '*.nc')):
-        os.remove(file)
-
-    # delete qouts
-    logging.info('Deleting qouts')
-    for file in glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')):
-        os.remove(file)
-
-    # delete all but the most recent qfinal
-    logging.info('Deleting qfinals')
-    for vpu_dir in glob.glob(os.path.join(configs_dir, '*')):
-        qfinal_files = natsort.natsorted(glob.glob(os.path.join(vpu_dir, 'finalstate*.parquet')))
-        if len(qfinal_files) > 1:
-            for file in qfinal_files[:-1]:
-                os.remove(file)
+            raise RuntimeError(f"Failed to obtain configs from S3: {result.stderr}")
 
 def get_qinits_from_s3(s3: s3fs.S3FileSystem,
+                       local_hourly_zarr: str,
                        configs_dir: str,
                        s3_qfinal_dir: str,
                        outputs_dir: str) -> None:
@@ -377,23 +367,45 @@ def get_qinits_from_s3(s3: s3fs.S3FileSystem,
     Returns:
     - None
     """
+    # First find the last date in the local hourly zarr
+    with xr.open_zarr(local_hourly_zarr) as ds:
+        last_retro_time: np.datetime64 = ds['time'][-1].values
+
+    last_retro_time = pd.to_datetime(last_retro_time).strftime('%Y%m%d%H%M')
+
     # download the qfinal files
     for vpu in tqdm.tqdm(glob.glob(os.path.join(configs_dir, '*'))):
         vpu = os.path.basename(vpu)
-        most_recent_qfinal = natsort.natsorted(s3.ls(f'{s3_qfinal_dir}/{vpu}/'))[-1]
-        local_file_name = os.path.join(outputs_dir, vpu, os.path.basename(most_recent_qfinal))
-        local_file_name = local_file_name.replace('00.', '.')
-        if not os.path.exists(local_file_name):
-            s3.get(most_recent_qfinal, local_file_name)
+        s3_qfinals = [f for f in s3.ls(f'{s3_qfinal_dir}/{vpu}/') if last_retro_time in f]
+        local_qfinals = set(glob.glob(os.path.join(outputs_dir, vpu, 'finalstate*.parquet')))
+        if not s3_qfinals:
+            raise FileNotFoundError(f"No finalstate files found for {vpu} in S3 at {s3_qfinal_dir} for {last_retro_time}")
+        
+        s3_qfinal = s3_qfinals[0]  # Take the first one, there should only be one
+        
+        exists = False
+        for local_file_name in local_qfinals:
+            if os.path.basename(local_file_name) == os.path.basename(s3_qfinal):
+                # If the local file already exists, skip downloading
+                exists = True
+                continue
+
+            # Otherwise, remove the local file that doesn't match
+            os.remove(local_file_name)
+        if not exists:
+            # Download the file from S3
+            s3.get(s3_qfinal, os.path.join(outputs_dir, vpu, os.path.basename(s3_qfinal)))
+
     return
 
-def verify_era5_data(runoff_dir: str, hourly_zarr: str) -> None:
+def verify_era5_data(runoff_dir: str, hourly_zarr: str, CL: CloudLog) -> None:
     """
     Verifies that the ERA5 data is compatible with the retrospective zarr
     """
     runoff_files = glob.glob(os.path.join(runoff_dir, '*.nc'))
     if not runoff_files:
-        raise FileNotFoundError("No ERA5 runoff files found. ERA5 probably not downloaded correctly.")
+        CL.ping('STOPPING', f"No-runoff-files-found")
+        exit()
     
     with xr.open_mfdataset(runoff_files) as ds , xr.open_zarr(hourly_zarr) as hourly_ds:
         # Check the the time dimension
@@ -402,12 +414,21 @@ def verify_era5_data(runoff_dir: str, hourly_zarr: str) -> None:
         total_time = np.concatenate((retro_time, ro_time))
         difs = np.diff(total_time)
         if not np.all(difs == difs[0]):
-            raise ValueError('Time dimension of ERA5 is not compatible with the retrospective zarr')
+            CL.ping('STOPPING', f"Time-dimension-of-ERA5-is-not-compatible-with-the-retrospective-zarr")
 
         # Check that there are no nans
         if np.isnan(ds['ro'].values).any():
-            raise ValueError('ERA5 data contains nans')
+            CL.ping('STOPPING', f"ERA5-data-contains-nans")
         
+def processes(runoff_dir) -> int:
+    # For inflows files and multiprocess, for each 1GB of daily runoff data, we need ~ 6GB for peak memory consumption.
+    # Otherwise, some m3 files will never be written and no error is raised
+    sample_runoff_file = glob.glob(os.path.join(runoff_dir, '*.nc'))[0]
+    processes = min(
+        os.cpu_count(),
+        max(round(psutil.virtual_memory().total * 0.9 / (os.path.getsize(sample_runoff_file) * 6*24 * len(glob.glob(os.path.join(runoff_dir, '*.nc'))))), 1)
+    )
+    return processes
 
 def _make_inflow_for_vpu(vpu: str,
                          configs_dir: str,
@@ -415,6 +436,7 @@ def _make_inflow_for_vpu(vpu: str,
                          runoff_dir: str) -> None:
     vpu_dir = os.path.join(configs_dir, vpu)
     inflow_dir = os.path.join(inflows_dir, vpu)
+    os.makedirs(inflow_dir, exist_ok=True)
 
     weight_table = glob.glob(os.path.join(vpu_dir, 'gridweights_ERA5*.nc'))[0]
 
@@ -424,35 +446,67 @@ def _make_inflow_for_vpu(vpu: str,
                                             y_var='latitude',
                                             time_var='time',
                                             )
-    rr.runoff.write_catchment_volumes(df, inflow_dir, vpu[-3:])
+    
+    start_date = df.index[0].strftime('%Y%m%d%H%M')
+    end_date = df.index[-1].strftime('%Y%m%d%H%M')
+    file_name = f'volumes_{start_date}_{end_date}.nc'
+    inflow_file_path = os.path.join(inflow_dir, file_name)
 
-    return
+    river_ids = df.columns.astype(int).values
+    time = df.index.to_numpy()
+
+    ds = xr.Dataset(
+        data_vars={
+            'volume': (('time', 'river_id'), df.to_numpy(), {
+                'long_name': 'Incremental catchment runoff volume',
+                'units': 'm3'
+            }),
+        },
+        coords={
+            'time': ('time', time, {
+                'long_name': 'time',
+                'standard_name': 'time',
+                'axis': 'T',
+                'time_step': f'{(df.index[1] - df.index[0]).seconds}'
+            }),
+            'river_id': ('river_id', river_ids, {
+                'long_name': 'unique ID number for each river'
+            }),
+        },
+        attrs={
+            'Conventions': 'CF-1.6'
+        }
+    )
+
+    # Prepare encoding properly
+    encoding = {
+        'volume': {'zlib': True, 'complevel': 5},
+        'time': {
+            'units': f'seconds since {df.index[0].strftime("%Y-%m-%d %H:%M:%S")}',
+            'dtype': 'i4',
+            'zlib': True,
+            'complevel': 5
+        },
+        'river_id': {'dtype': 'i4', 'zlib': True, 'complevel': 5}
+    }
+
+    ds.to_netcdf(inflow_file_path, format='NETCDF4', encoding=encoding)
 
 def _make_inflow_for_vpu_star(args):
     return _make_inflow_for_vpu(*args)
 
-def processes(runoff_dir: str,) -> int:
-    # For inflows files and multiprocess, for each 1GB of runoff data, we need ~ 6GB for peak memory consumption.
-    # Otherwise, some m3 files will never be written and no error is raised
-    sample_runoff_file = glob.glob(os.path.join(runoff_dir, '*.nc'))[0]
-    processes = max(
-        1,
-        round(psutil.virtual_memory().total * 0.8 / (os.path.getsize(sample_runoff_file) * 25))
-    )
-    logging.info(f"Using {processes} processes")
-    return processes
-
 def inflows(runoff_dir: str,
             configs_dir: str,
             inflows_dir: str,
-            p) -> None:
+            p: Pool,
+            CL: CloudLog) -> None:
     vpu_numbers = [
         (os.path.basename(d), configs_dir, inflows_dir, runoff_dir)
         for d in glob.glob(os.path.join(configs_dir, '*'))
     ]
     list(
         tqdm.tqdm(
-            p.imap(_make_inflow_for_vpu_star, vpu_numbers),
+            p.imap_unordered(_make_inflow_for_vpu_star, vpu_numbers),
             total=len(vpu_numbers)),
     )
 
@@ -461,8 +515,8 @@ def inflows(runoff_dir: str,
 
     # check that all inflow files were created correctly
     if not len(glob.glob(os.path.join(inflows_dir, '*', '*.nc'))) == expected_file_count:
-        raise FileNotFoundError("Not all inflow files were created correctly")
-
+        CL.ping('FAIL', 'Not-all-inflow-files-were-created-correctly')
+        exit()
     return
 
 def _run_river_route(vpu_dir: str, outputs_dir: str, inflows_dir: str) -> None:
@@ -499,11 +553,11 @@ def run_river_route(configs_dir: str,
     vpus = glob.glob(os.path.join(configs_dir, '*'))
     list(
         tqdm.tqdm(
-            p.imap(_run_river_route_star, [(vpu, outputs_dir, inflows_dir) for vpu in vpus]),
+            p.imap_unordered(_run_river_route_star, [(vpu, outputs_dir, inflows_dir) for vpu in vpus]),
             total=len(vpus)),
     )
 
-def drop_coords(ds: xr.Dataset, qout: str = 'Q') -> xr.DataArray:
+def drop_coords(ds: xr.Dataset, qout: str = 'Q'):
     """
     Helps load faster, gets rid of variables/dimensions we do not need (lat, lon, etc.)
 
@@ -516,6 +570,7 @@ def drop_coords(ds: xr.Dataset, qout: str = 'Q') -> xr.DataArray:
     """
     return ds[[qout]].reset_coords(drop=True)
 
+
 def concatenate_outputs(outputs_dir: str,
                         hourly_zarr_path: str,
                         daily_zarr_path: str,
@@ -523,7 +578,8 @@ def concatenate_outputs(outputs_dir: str,
     # Build the week dataset
     qouts = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')))
     if not qouts:
-        raise FileNotFoundError("No Qout files found. RAPID probably not run correctly.")
+        CL.ping('FAIL', f"No-Qout-files-found")
+        exit()
 
     with xr.open_zarr(daily_zarr_path) as daily_zarr:
         with xr.open_mfdataset(
@@ -542,16 +598,16 @@ def concatenate_outputs(outputs_dir: str,
                 chunks = hourly_zarr.chunks
 
             # Append hourly data first
-            CL.log_message('RUNNING', f'Appending to zarr: {earliest_date} to {latest_date}')
+            CL.ping('RUNNING', f'Appending-to-hourly-zarr-{earliest_date}-to-{latest_date}')
             (
                 new_ds
                 .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
                 .to_zarr(hourly_zarr_path, mode='a', append_dim='time', consolidated=True)
             )
 
-            new_ds = new_ds.resample(time='1D').mean('time')
-
             # Append daily data
+            CL.ping('RUNNING', f'Appending-to-daily-zarr-{earliest_date}-to-{latest_date}')
+            new_ds = new_ds.resample(time='1D').mean('time')
             chunks = daily_zarr.chunks
             (
                 new_ds
@@ -568,54 +624,20 @@ def verify_concatenated_outputs(zarr: str, CL: CloudLog) -> None:
         time_size = ds.chunks['time'][0]
         # Test a river to see if there are nans
         if np.isnan(ds.isel(river_id=1, time=slice(time_size, -1))['Q'].values).any():
-            CL.log_message('FAIL', f'{zarr} contain nans')
+            CL.ping('FAIL', f'{zarr}-contain-nans')
             exit()
 
         # Verify that the time dimension is correct
         times = ds['time'].values
         if not np.all(np.diff(times) == times[1] - times[0]):
-            CL.log_message('FAIL', f'Time dimension of {zarr} is incorrect')
+            CL.ping('FAIL', f'Time-dimension-of-{zarr}-is-incorrect')
             exit()
 
-def sync_local_to_s3(outputs_dir: str,
-                     s3_qfinal_dir: str, 
-                     local_hourly_zarr: str,
-                     local_daily_zarr: str,
-                     s3_hourly_zarr: str,
-                     s3_daily_zarr: str,
-                     credentials: str) -> None:
-    """
-    Put our local edits on the zarrs to S3.
-    Also upload qfinal files to S3.
-
-    Raises:
-        Exception: If the sync command fails.
-    """
-    # Deprecated: we no longer sync Qout files
-
-    # qout_files = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')))
-    # if not qout_files:
-    #     raise FileNotFoundError("No Qout files found. River-route probably not run correctly.")
-
-    # logging.info('Syncing Qout files to S3')
-    # for qout_file in qout_files:
-    #     vpu = os.path.basename(os.path.dirname(qout_file))
-    #     result = subprocess.run(
-    #         f's5cmd '
-    #         f'--credentials-file {ODP_CREDENTIALS_FILE} --profile odp '
-    #         f'cp '
-    #         f'{qout_file} '
-    #         f'{GEOGLOWS_ODP_RETROSPECTIVE_BUCKET}/retrospective/{vpu}/{os.path.basename(qout_file)}',
-    #         shell=True, capture_output=True, text=True,
-    #     )
-    #     if not result.returncode == 0:
-    #         raise Exception(f"Sync failed. Error: {result.stderr}")
-
-    # qfinal_files = natsort.natsorted(glob.glob(os.path.join(outputs_dir, '*', 'Qfinal*.nc')))
-    # if not qfinal_files:
-    #     raise FileNotFoundError("No Qfinal files found. River-route probably not run correctly.")
-
-    logging.info('Syncing Qfinal files to S3')
+def sync_qfinals_to_s3(outputs_dir: str,
+                       s3_qfinal_dir: str,
+                       credentials: str,
+                       CL: CloudLog) -> None:
+    CL.ping('RUNNING', 'syncing-finalstates-to-S3')
     result = subprocess.run(
         f's5cmd '
         f'--credentials-file {credentials} --profile odp '
@@ -625,11 +647,28 @@ def sync_local_to_s3(outputs_dir: str,
         shell=True, capture_output=True, text=True,
     )
     if not result.returncode == 0:
-        raise Exception(f"Sync failed. Error: {result.stderr}")
+        CL.ping('FAIL', f"Syncing-finalstates-to-S3-failed")
+        logging.error(result.stderr)
+        exit()
 
+def sync_local_to_s3(local_hourly_zarr: str,
+                     local_daily_zarr: str,
+                     s3_hourly_zarr: str,
+                     s3_daily_zarr: str,
+                     credentials: str,
+                     CL: CloudLog) -> None:
+    """
+    Put our local edits on the zarrs to S3.
+
+    Raises:
+        Exception: If the sync command fails.
+    """
     # sync the zarrs. We can use sync because 0.* files are not is not on local side
     for zarr, s3_zarr in zip([local_hourly_zarr, local_daily_zarr], [s3_hourly_zarr, s3_daily_zarr]):
-        logging.info(f'Syncing zarr {zarr} to S3')
+    # for zarr, s3_zarr in zip([local_hourly_zarr], [s3_hourly_zarr]):
+        # files = glob.glob(os.path.join(zarr), 'Q', '*')
+        # chunks = sorted({os.path.basename(f).split('.')[0]  for f in files})
+        CL.ping('RUNNING', f'syncing-{zarr}-to-S3')
         result = subprocess.run(
             f"s5cmd "
             f"--credentials-file {credentials} --profile odp "
@@ -639,25 +678,271 @@ def sync_local_to_s3(outputs_dir: str,
             shell=True, capture_output=True, text=True,
         )
         if not result.returncode == 0:
-            raise Exception(f"Sync failed. Error: {result.stderr}")
+            CL.ping('FAIL', f"Syncing-{zarr}-to-S3-failed")
+            logging.error(result.stderr)
+            exit()
         
     return
 
-def update_monthly_zarrs(daily_zarr: str,
+def classify_flow(flow_value, cutoffs):
+    if np.isnan(flow_value):
+        return pd.NA
+    for i, cutoff in enumerate(cutoffs):
+        if flow_value <= cutoff:
+            return i + 1  # 1-based class
+    return 5
+    
+def update_hydrosos_maps(date_range: pd.DatetimeIndex,
+                         s3_monthly_timesteps_zarr: str,
+                         hydro_sos_dir: str,
+                         credentials: str,
+                         CL: CloudLog) -> None:
+    """
+    Please see `https://github.com/geoglows/hydrosos_maps/tree/main`
+    """
+    # Read the combined hydrobasins shapefile
+    combined_gdf = gpd.read_file(HYDROBASINS_FILE)
+
+    # Read river IDs
+    river_ids = pd.read_csv(UNIQUE_HYBASIDS_CSV)["LINKNO"].dropna().unique()
+
+    # Open GEOGloWS retrospective dataset
+    monthly_ds = xr.open_zarr(s3_monthly_timesteps_zarr, storage_options=storage_options)
+
+    # Filter dataset to only the matched river IDs
+    filtered_monthly_ds = monthly_ds.sel(river_id=xr.DataArray(river_ids, dims="river_id"))
+
+    # Open flow threshold dataset
+    flow_thresh_ds = xr.open_dataset(FLOW_CUTOFF_NC)
+
+    # Read river ID to HYBAS_ID mapping
+    mapping_df = pd.read_csv(DUPLICATED_HYBASIDS_CSV)
+    mapping_df = mapping_df.dropna(subset=['LINKNO', 'HYBAS_ID'])
+
+    # Group LINKNOs by HYBAS_ID
+    hybas_groups = mapping_df.groupby('HYBAS_ID')['LINKNO'].apply(list)
+
+    # Open flow threshold dataset
+    flow_thresh_by_hydrobas_ds = xr.open_dataset(FLOW_CUTOFF_NC_BY_HYBASID)
+
+    # Color map
+    class_color_map = {
+        1.0: '#cd233f',   # red
+        2.0: '#ffa885',   # peach
+        3.0: '#e7e2bc',   # light yellow
+        4.0: '#8eceee',   # light blue
+        5.0: '#2c7dcd',   # medium blue
+    }
+
+    # QGIS setup
+    QgsApplication.setPrefixPath(os.environ["CONDA_PREFIX"], True) # for avoiding "Application path not initialized"
+
+    app = QgsApplication([], False)
+    app.initQgis()
+    # Append the path where processing plugin can be found
+    sys.path.append('/home/ubuntu/miniforge3/envs/update/share/qgis/python/plugins')
+    processing.core.Processing.Processing.initialize()
+
+    # Load the matched basins file
+    matched_basins = pd.read_csv(HYBASID_TO_LINKNO_CSV)
+
+    for year in date_range.strftime('%Y').tolist():
+        for month in date_range.strftime('%m').tolist():
+            # Compute flow classification CSV for this month/year
+            date_str = f"{year}-{month}"
+            year = int(year)
+            month = int(month)
+            CL.ping('RUNNING', f'Making-map-tiles-for-{date_str}')
+
+            # Compute mean flow
+            monthly_flow = (
+                filtered_monthly_ds
+                .sel(time=date_str)
+                ["Q"]
+                .mean(dim="time", skipna=True)
+                .to_pandas()
+            )
+
+            # Get cutoffs for the month (1-based indexing for months in xarray)
+            flow_cutoffs = flow_thresh_ds.sel(month=month)
+
+            # Classify flows
+            results = []
+            for river_id in river_ids:
+                try:
+                    flow_value = monthly_flow.loc[river_id]
+                    cutoff_vals = flow_cutoffs.sel(river_id=river_id)["flow_cutoff"].values
+                    category = classify_flow(flow_value, cutoff_vals)
+                    results.append({
+                        'year': year,
+                        'month': month,
+                        'river_id': river_id,
+                        'flow': flow_value,
+                        'class': category
+                    })
+                except KeyError:
+                    results.append({
+                        'year': year,
+                        'month': month,
+                        'river_id': river_id,
+                        'flow': pd.NA,
+                        'class': pd.NA
+                    })
+
+            # Convert to DataFrame
+            flow_df = pd.DataFrame(results)   
+
+            # Compute mean flow for the month
+            flow_data = (
+                monthly_ds
+                .sel(time=date_str)
+                ["Q"]
+                .mean(dim="time", skipna=True)
+            )
+
+            # Compute duplicates
+            results = []
+            for hybas_id, linknos in hybas_groups.items():
+                try:
+                    linknos = [int(l) for l in linknos if pd.notna(l)]
+                    flow_values = flow_data.sel(river_id=linknos).sum(dim="river_id", skipna=True).values.item()
+                    cutoff_vals = flow_thresh_by_hydrobas_ds.sel(month=month, hybas_id=hybas_id)["flow_cutoff"].values
+                    category = classify_flow(flow_values, cutoff_vals)
+
+                    results.append({
+                        'year': year,
+                        'month': month,
+                        'hybas_id': hybas_id,
+                        'flow': flow_values,
+                        'class': category
+                    })
+                except Exception as e:
+                    results.append({
+                        'year': year,
+                        'month': month,
+                        'hybas_id': hybas_id,
+                        'flow': pd.NA,
+                        'class': pd.NA
+                    })
+
+            flow_df2 = pd.DataFrame(results)
+
+            # Merge flow classification with matched basins using river_id → LINKNO
+            merged_df = pd.merge(flow_df, matched_basins, left_on="river_id", right_on="LINKNO", how="left")
+            
+            # Standardize the HYBAS ID column
+            flow_df2 = flow_df2.rename(columns={"hybas_id": "HYBAS_ID"})
+            merged_df = merged_df.drop(columns=["river_id"])
+
+            # Concatenate the two DataFrames
+            with warnings.catch_warnings():
+                # TODO: pandas has a FutureWarning for concatenating DataFrames with Null entries
+                warnings.filterwarnings("ignore", category=FutureWarning)
+                combined_df = pd.concat([flow_df2, merged_df], ignore_index=True)
+
+            # Merge with shapefile using HYBAS_ID (keep all hydrobasins)
+            final_gdf = combined_gdf.merge(combined_df, on="HYBAS_ID", how="left")
+
+            # Keep only selected columns
+            final_gdf = final_gdf[["HYBAS_ID", "LINKNO", "flow", "class", "geometry"]]
+            final_gdf['LINKNO'] = final_gdf['LINKNO'].astype('Int64') 
+
+            layer = QgsVectorLayer(final_gdf.to_json(to_wgs84=True),"", "ogr")
+            if not layer.isValid():
+                raise ValueError(f"Layer is not valid")
+
+            # Apply categorized renderer
+            categories = []
+            for class_value, hex_color in class_color_map.items():
+                symbol = QgsSymbol.defaultSymbol(layer.geometryType())
+                symbol.setColor(QColor(hex_color))
+                label = str(int(class_value))
+                category = QgsRendererCategory(class_value, symbol, label)
+                categories.append(category)
+
+            renderer = QgsCategorizedSymbolRenderer('class', categories)
+            layer.setRenderer(renderer)
+            layer.triggerRepaint()
+
+            QgsProject.instance().addMapLayer(layer)
+
+            # Create individual output directory
+            output_dir = os.path.join(hydro_sos_dir, "maps", f'year={year}', f'month={str(month).zfill(2)}')
+            os.makedirs(output_dir, exist_ok=True)
+
+            extent = layer.extent()
+            crs = layer.crs() 
+            params = {
+                'EXTENT': f"{extent.xMinimum()},{extent.xMaximum()},{extent.yMinimum()},{extent.yMaximum()}[{crs.authid()}]",
+                'ZOOM_MIN': 0,
+                'ZOOM_MAX': 6,
+                'DPI': 96,
+                'BACKGROUND_COLOR': QColor(0, 0, 0, 0),
+                'ANTIALIAS': True,
+                'TILE_FORMAT': 0,  # PNG
+                'METATILESIZE': 4,
+                'TILE_WIDTH': 256,
+                'TILE_HEIGHT': 256,
+                'TMS_CONVENTION': False,
+                'HTML_TITLE': '',
+                'HTML_ATTRIBUTION': '',
+                'HTML_OSM': False,
+                'OUTPUT_DIRECTORY': output_dir,
+                'OUTPUT_HTML': 'TEMPORARY_OUTPUT'
+            }
+
+            # Create maptiles
+            processing.run("native:tilesxyzdirectory", params)
+
+            # Optionally remove the layer from project to keep things clean
+            QgsProject.instance().removeMapLayer(layer)
+
+            # Remove small files
+            for dirpath, _, filenames in os.walk(output_dir):
+                for filename in filenames:
+                    if filename.lower().endswith('.png'):
+                        file_path = os.path.join(dirpath, filename)
+                        if os.path.getsize(file_path) <= 360:
+                            os.remove(file_path)
+
+            # Use s5cmd to sync the output directory to S3
+            s3_path = f'{S3_HYDROSOS_DIR}/year={year}/month={str(month).zfill(2)}/'
+            result = subprocess.run(
+                f's5cmd '
+                f'--credentials-file {credentials} --profile odp '
+                f'sync '
+                f'{output_dir} '
+                f'{s3_path}',
+                shell=True, capture_output=True, text=True,
+            )
+            if not result.returncode == 0:
+                CL.ping('FAIL', f"Syncing-hydrosos-maps-to-S3-failed")
+                logging.error(result.stderr)
+                exit()
+
+            # Now remove the output directory
+            shutil.rmtree(output_dir)
+
+    app.exitQgis()
+
+def update_monthly_zarrs(hourly_zarr: str,
                          monthly_timesteps: str,
-                         monthly_timeseries: str) -> None:
-    daily_ds = xr.open_zarr(daily_zarr)
+                         monthly_timeseries: str,
+                         hydro_sos_dir: str,
+                         credentials: str,
+                         CL: CloudLog) -> None:
+    hourly_ds = xr.open_zarr(hourly_zarr)
     monthly_steps_ds = xr.open_zarr(monthly_timesteps, storage_options=storage_options)
 
     # Check if there is at least a whole month of data in the daily zarr not in the daily zarr
-    last_daily_time = daily_ds['time'][-1].values
+    last_hourly_time = hourly_ds['time'][-1].values
     last_monthly_time = monthly_steps_ds['time'][-1].values
     next_month = last_monthly_time.astype('datetime64[M]') + np.timedelta64(1, 'M')
-    current_month = (last_daily_time + np.timedelta64(1, 'D')).astype('datetime64[M]')
-    if current_month > next_month:
-        logging.info(f'Updating monthly zarrs: [{next_month}, {current_month})')
+    last_whole_month = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[M]') - np.timedelta64(1, 'M')
+    if last_whole_month >= next_month:
+        CL.ping('RUNNING', f'Updating-monthly-zarrs-{next_month}-to-{last_whole_month}')
         # Find number of months to add
-        months_ds = daily_ds.sel(time=slice(next_month, current_month))
+        months_ds = hourly_ds.sel(time=slice(next_month, last_whole_month))
         months_ds = months_ds.resample({'time':'MS'}).mean()
 
         # Now chunk and append
@@ -675,11 +960,17 @@ def update_monthly_zarrs(daily_zarr: str,
             .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
             .to_zarr(monthly_timeseries, mode='a', append_dim='time', consolidated=True, storage_options=storage_options)
         )
+
+        # Update the hydrosos maps
+        date_range = pd.date_range(next_month, last_whole_month, freq='MS', inclusive='left')
+        update_hydrosos_maps(date_range, monthly_timesteps, hydro_sos_dir, credentials, CL)
+
     
 def update_yearly_zarrs(hourly_zarr: str,
                         annual_timesteps: str,
                         annual_timeseries: str,
-                        annual_maximums: str) -> None:
+                        annual_maximums: str,
+                        CL: CloudLog) -> None:
     hourly_ds = xr.open_zarr(hourly_zarr)
     annual_steps_ds = xr.open_zarr(annual_timesteps, storage_options=storage_options)
 
@@ -687,12 +978,12 @@ def update_yearly_zarrs(hourly_zarr: str,
     last_hourly_time = hourly_ds['time'][-1].values
     last_annual_time = annual_steps_ds['time'][-1].values
     next_year = last_annual_time.astype('datetime64[Y]') + np.timedelta64(1, 'Y')
-    current_year = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[Y]')
+    last_whole_year = (last_hourly_time + np.timedelta64(1, 'h')).astype('datetime64[Y]') - np.timedelta64(1, 'Y')
 
-    if current_year > next_year:
-        logging.info(f'Updating yearly zarrs: [{next_year}, {current_year})')
+    if last_whole_year >= next_year:
+        CL.ping('RUNNING', f'Updating-yearly-zarrs-{next_year}-to-{last_whole_year}')
         # Find number of years to add
-        years_ds = hourly_ds.sel(time=slice(next_year, current_year))
+        years_ds = hourly_ds.sel(time=slice(next_year, last_whole_year))
         years_ds = years_ds.resample({'time':'YS'}).mean()
 
         # Now chunk and append
@@ -712,7 +1003,7 @@ def update_yearly_zarrs(hourly_zarr: str,
         )
 
         # Do the same for maximums
-        years_ds = hourly_ds.sel(time=slice(next_year, current_year))
+        years_ds = hourly_ds.sel(time=slice(next_year, last_whole_year))
         years_ds = years_ds.resample({'time':'YS'}).max()
         chunks = xr.open_zarr(annual_maximums, storage_options=storage_options).chunks
         (
@@ -720,3 +1011,55 @@ def update_yearly_zarrs(hourly_zarr: str,
             .chunk({"time": chunks["time"][0], "river_id": chunks["river_id"][0]})
             .to_zarr(annual_maximums, mode='a', append_dim='time', consolidated=True, storage_options=storage_options)
         )
+
+def cleanup(data_dir: str,
+            era_dir: str,
+            runoff_dir: str,
+            inflows_dir: str,
+            outputs_dir: str,
+            hydrosos_dir: str,
+            clear_qinit: bool = False) -> None:
+    """
+    Cleans up the working directory by deleting namelists, inflow files, and
+    caching qfinals and qouts.
+    """
+    # change the owner of the data directory and all sub files and directories to the user
+    os.system(f'sudo chown -R $USER:$USER {data_dir}')
+
+    # delete runoff data
+    logging.info('Deleting era data')
+    if era_dir:
+        for file in glob.glob(os.path.join(era_dir, '*')):
+            os.remove(file)
+
+    logging.info('Deleting runoff data')
+    if runoff_dir:
+        for file in glob.glob(os.path.join(runoff_dir, '*')):
+            os.remove(file)
+
+    # delete inflow files
+    logging.info('Deleting inflow files')
+    for file in glob.glob(os.path.join(inflows_dir, '*', '*.nc')):
+        os.remove(file)
+
+    # delete qouts
+    logging.info('Deleting qouts')
+    for file in glob.glob(os.path.join(outputs_dir, '*', 'Qout*.nc')):
+        os.remove(file)
+
+    # delete all but the most recent qfinal
+    logging.info('Deleting qfinals')
+    for vpu_dir in glob.glob(os.path.join(outputs_dir, '*')):
+        qfinal_files = natsort.natsorted(glob.glob(os.path.join(vpu_dir, 'finalstate*.parquet')))
+        if clear_qinit:
+            # remove all qfinal files
+            for f in qfinal_files:
+                os.remove(f)
+        elif len(qfinal_files) > 1:
+            for f in qfinal_files[:-1]:
+                os.remove(f)
+
+    # remove the hydrosos directories
+    logging.info('Deleting hydrosos directories')
+    for folder in glob.glob(os.path.join(hydrosos_dir, '*')):
+        shutil.rmtree(folder)

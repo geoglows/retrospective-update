@@ -20,4 +20,3 @@ echo "Creating conda environment from $ENVIRONMENT_FILE..."
 mamba env create -f $ENVIRONMENT_FILE -n $ENVIRONMENT_NAME
 mamba init
 source ~/.bashrc
-

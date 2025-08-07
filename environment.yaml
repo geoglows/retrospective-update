@@ -9,8 +9,9 @@ dependencies:
   - cdsapi>=0.7.4
   - dask
   - distributed
-  - fastparquet
   - flox
+  - geopandas
+  - qgis
   - h5netcdf
   - matplotlib
   - natsort
@@ -19,6 +20,7 @@ dependencies:
   - pandas
   - pip
   - psutil
+  - pyarrow
   - pyyaml
   - python
   - requests
@@ -29,4 +31,4 @@ dependencies:
   - xarray
   - zarr=2
   - pip:
-    - river-route>=1.2.1
+    - river-route>=1.2.2
