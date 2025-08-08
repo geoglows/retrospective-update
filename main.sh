@@ -51,8 +51,8 @@ export DAILY_ZARR="$WORK_DIR/daily.zarr"
 export S3_HOURLY_ZARR="$S3_BASE_URI/retrospective/hourly.zarr"
 export S3_DAILY_ZARR="$S3_BASE_URI/retrospective/daily.zarr"
 
-export MONTHLY_TIMESERIES_ZARR="$WORK_DIR/monthly-timeseries.zarr"
-export MONTHLY_TIMESTEPS_ZARR="$WORK_DIR/monthly-timesteps.zarr"
+export MONTHLY_TIMESERIES="$WORK_DIR/monthly-timeseries.zarr"
+export MONTHLY_TIMESTEPS="$WORK_DIR/monthly-timesteps.zarr"
 export S3_MONTHLY_TIMESERIES="$S3_BASE_URI/retrospective/monthly-timeseries.zarr"
 export S3_MONTHLY_TIMESTEPS="$S3_BASE_URI/retrospective/monthly-timesteps.zarr"
 
