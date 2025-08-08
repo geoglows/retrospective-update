@@ -9,7 +9,8 @@ from natsort import natsorted
 
 from cloud_logger import CloudLog
 from set_env_variables import (
-    DAILY_ZARR, FINAL_STATES_DIR, HOURLY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, S3_FINAL_STATES_DIR, CONFIGS_DIR
+    DAILY_ZARR, FINAL_STATES_DIR, HOURLY_ZARR, S3_HOURLY_ZARR, S3_DAILY_ZARR, S3_FINAL_STATES_DIR, CONFIGS_DIR,
+    MONTHLY_TIMESTEPS_ZARR, MONTHLY_TIMESERIES_ZARR, S3_MONTHLY_TIMESTEPS_ZARR, S3_MONTHLY_TIMESERIES_ZARR,
 )
 
 
@@ -71,6 +72,8 @@ if __name__ == '__main__':
         cl.log('Verifying local data and code are synced with s3 and prepared for success')
         check_local_zarrs_match_s3(HOURLY_ZARR, S3_HOURLY_ZARR)
         check_local_zarrs_match_s3(DAILY_ZARR, S3_DAILY_ZARR)
+        check_local_zarrs_match_s3(MONTHLY_TIMESERIES_ZARR, S3_MONTHLY_TIMESERIES_ZARR)
+        check_local_zarrs_match_s3(MONTHLY_TIMESTEPS_ZARR, S3_MONTHLY_TIMESTEPS_ZARR)
         check_for_init_files()
         exit(0)
     except Exception as e:

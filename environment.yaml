@@ -23,10 +23,11 @@ dependencies:
   - pyyaml
   - python
   - requests
+  - rasterio
   - s3fs
   - scipy
   - tqdm
   - xarray
   - zarr=2
   - pip:
-      - river-route=1.3.0
+      - river-route==1.3.0

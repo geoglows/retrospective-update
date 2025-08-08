@@ -29,7 +29,9 @@ export AWS_CREDENTIALS_FILE="/home/ubuntu/awscredentials"
 
 export OUTPUTS_DIR="$WORK_DIR/discharge"
 export ERA5_DIR="$WORK_DIR/era5"
+
 export HYDROSOS_DIR="$WORK_DIR/hydrosos"
+export S3_HYDROSOS_DIR="$S3_BASE_URI/hydrosos"
 
 export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="$S3_BASE_URI/routing-configs"
@@ -45,8 +47,11 @@ export DAILY_ZARR="$WORK_DIR/daily.zarr"
 export S3_HOURLY_ZARR="$S3_BASE_URI/retrospective/hourly.zarr"
 export S3_DAILY_ZARR="$S3_BASE_URI/retrospective/daily.zarr"
 
+export MONTHLY_TIMESERIES_ZARR="$WORK_DIR/monthly-timeseries.zarr"
+export MONTHLY_TIMESTEPS_ZARR="$WORK_DIR/monthly-timesteps.zarr"
 export S3_MONTHLY_TIMESERIES="$S3_BASE_URI/retrospective/monthly-timeseries.zarr"
 export S3_MONTHLY_TIMESTEPS="$S3_BASE_URI/retrospective/monthly-timesteps.zarr"
+
 export S3_ANNUAL_TIMESERIES="$S3_BASE_URI/retrospective/annual-timeseries.zarr"
 export S3_ANNUAL_TIMESTEPS="$S3_BASE_URI/retrospective/annual-timesteps.zarr"
 export S3_ANNUAL_MAXIMUMS="$S3_BASE_URI/retrospective/annual-maximums.zarr"
@@ -73,6 +78,14 @@ fi
 if [ ! -d "$DAILY_ZARR" ]; then
     echo "Daily zarr directory is empty or does not exist. Downloading a copy."
     s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_DAILY_ZARR/*" $DAILY_ZARR
+fi
+if [ ! -d "$MONTHLY_TIMESERIES" ]; then
+    echo "Monthly timeseries directory is empty or does not exist. Downloading a copy."
+    s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESERIES/*" $WORK_DIR/monthly-timeseries.zarr
+fi
+if [ ! -d "$MONTHLY_TIMESTEPS" ]; then
+    echo "Monthly timesteps directory is empty or does not exist. Downloading a copy."
+    s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESTEPS/*" $WORK_DIR/monthly-timesteps.zarr
 fi
 
 # run a setup/preparation/validation check
@@ -115,3 +128,19 @@ rm -r $ERA5_DIR
 # sync to s3
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HOURLY_ZARR/*" $S3_HOURLY_ZARR/
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$DAILY_ZARR/*" $S3_DAILY_ZARR/
+
+# prepare monthly derived products
+python /home/ubuntu/retrospective-update/retrospective-update/monthly_products.py
+if [ $? -ne 0 ]; then
+  echo "Error: Failed to run the monthly products script."
+  exit 1
+  # else synchronize the monthly products to S3
+else
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*" $S3_HYDROSOS_DIR/
+fi
+
+# shutdown the machine
+curl -X POST -H "Content-Type: application/json" -d '{"text": "All tasks completed successfully. Shutting down the machine."}' $WEBHOOK_URL
+sudo shutdown -h now
