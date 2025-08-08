@@ -22,8 +22,6 @@ df = (
 
 df.columns = df.columns.astype(str)
 quantiles = ['0.1', '0.25', '0.75', '0.9']
-print(df.columns)
-print(quantiles)
 
 for index, quantile in enumerate(quantiles[:-1]):
     q1 = quantile
@@ -39,4 +37,4 @@ for index, quantile in enumerate(quantiles[:-1]):
     if (df[q1] >= df[q2]).any():
         print(f'Quantile {q1} is still invalid after adjustment')
 
-df
+df.to_parquet('./thresholds.parquet')
