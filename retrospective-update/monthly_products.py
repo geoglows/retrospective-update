@@ -17,11 +17,11 @@ from set_env_variables import (
 
 def update_monthly_products() -> None:
     # check which months are on the monthly datasets
-    with xr.open_zarr(MONTHLY_TIMESERIES_ZARR, storage_options={'anon': True}) as ds:
+    with xr.open_zarr(MONTHLY_TIMESTEPS_ZARR) as ds:
         months_calculated = set(ds.time.dt.strftime('%Y-%m-01').values)
 
     # check which months are in the local daily zarr
-    daily_zarr = xr.open_zarr(DAILY_ZARR, storage_options={'anon': True})
+    daily_zarr = xr.open_zarr(DAILY_ZARR)
     dates_available = pd.to_datetime(daily_zarr.time.values)
     months_available = set(dates_available.strftime('%Y-%m-01'))
 
@@ -45,22 +45,24 @@ def update_monthly_products() -> None:
         .mean()
     )
     cl.log('Appending to S3 monthly timeseries')
-    ds.to_zarr(MONTHLY_TIMESERIES_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+    daily_zarr.to_zarr(MONTHLY_TIMESERIES_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
     cl.log('Appending to S3 monthly timesteps')
-    ds.to_zarr(MONTHLY_TIMESTEPS_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
-    cl.log('Finished appending monthly average products')
+    daily_zarr.to_zarr(MONTHLY_TIMESTEPS_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
 
     # for each month in months_to_compute, also make a hydrosos geotiff
+    cl.log('Preparing HydroSOS COGs')
     id_pairs = pd.read_parquet(HYDROSOS_ID_PAIRS)
     thresholds = pd.read_parquet(HYDROSOS_THRESHOLDS)
     basins = gpd.read_parquet(HYDROSOS_BASINS)
     hydrosos_color_map = {
-        1: '#cd233f',  # red
-        2: '#ffa885',  # peach
-        3: '#e7e2bc',  # light yellow
-        4: '#8eceee',  # light blue
-        5: '#2c7dcd',  # medium blue
+        1: '#cd233f',
+        2: '#ffa885',
+        3: '#e7e2bc',
+        4: '#8eceee',
+        5: '#2c7dcd',
     }
+    color_to_rgb = lambda hex_color: tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    hydrosos_rgb_map = {k: color_to_rgb(v) for k, v in hydrosos_color_map.items()}
     with xr.open_zarr(MONTHLY_TIMESTEPS_ZARR) as ds:
         # now we want to combine columns with the same HYBAS_ID in the id_pairs dataframe
         discharges = (
@@ -92,20 +94,19 @@ def update_monthly_products() -> None:
         discharges[month] = discharges['class']
         discharges = discharges.drop(columns=['class', '0.1', '0.25', '0.75', '0.9'])
 
+    # create a cloud optimized geotiff for all the basin polygons
     basins = basins.merge(discharges, on='HYBAS_ID', how='inner')
     for month in months_to_compute:
-        # create a raster for all the basin polygons
         output_path = os.path.join(HYDROSOS_DIR, f'{month[:-3]}.tif')
         resolution = 0.05
         shape = (int(180 / resolution), int(360 / resolution))
         transform = rasterio.transform.from_origin(-180, 90, resolution, resolution)
-        fill = 0
         dtype = 'uint8'
         write_kwargs = {
             'driver': 'GTiff',
             'height': shape[0],
             'width': shape[1],
-            'count': 1,
+            'count': 3,
             'dtype': dtype,
             'crs': basins.crs,
             'transform': transform,
@@ -113,20 +114,24 @@ def update_monthly_products() -> None:
             'blockxsize': 512,
             'blockysize': 512,
             'compress': 'deflate',
-            'interleave': 'band'
+            'interleave': 'band',
+            'nodata': 0,
         }
         with rasterio.open(output_path, 'w', **write_kwargs) as dst:
-            dst.write(
-                rasterio.features.rasterize(
-                    [(geom, value) for geom, value in zip(basins.geometry, basins[month])],
-                    out_shape=shape,
-                    transform=transform,
-                    fill=fill,
-                    nodata=fill,
-                    dtype=dtype,
-                ),
-                1
-            )
+            # get the red, green, blue colors by converting hex characters to integers
+            for band in (1, 2, 3):  # for band in r, g, b
+                colors = basins[month].map(lambda x: hydrosos_rgb_map[x][band - 1]).astype(np.uint8)
+                dst.write(
+                    rasterio.features.rasterize(
+                        [(geom, value) for geom, value in zip(basins.geometry, colors)],
+                        out_shape=shape,
+                        transform=transform,
+                        dtype=dtype,
+                        fill=0,
+                        all_touched=True,
+                    ),
+                    band
+                )
 
 
 if __name__ == '__main__':

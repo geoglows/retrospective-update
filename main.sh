@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# first sleep for 4 minutes to allow for users to cancel the job
-#sleep 240
+# first sleep for 5 minutes to allow for users to cancel the job
+sleep 300
 
 # try to activate the conda environment
 source /home/ubuntu/miniconda3/bin/activate
@@ -31,13 +31,11 @@ export OUTPUTS_DIR="$WORK_DIR/discharge"
 export ERA5_DIR="$WORK_DIR/era5"
 
 export HYDROSOS_DIR="$WORK_DIR/hydrosos"
-export S3_HYDROSOS_DIR="$S3_BASE_URI/hydrosos"
+export S3_HYDROSOS_COGS="$S3_BASE_URI/hydrosos/cogs"
+export S3_HYDROSOS_FILES="$S3_BASE_URI/hydrosos/*.parquet"
 export HYDROSOS_ID_PAIRS="$WORK_DIR/hybas_linkno_pairs.parquet"
-export S3_HYDROSOS_ID_PAIRS="$S3_BASE_URI/hybas_linkno_pairs.parquet"
 export HYDROSOS_BASINS="$WORK_DIR/hydrobasins_level_4.parquet"
-export S3_HYDROSOS_BASINS="$S3_BASE_URI/hydrobasins_level_4.parquet"
 export HYDROSOS_THRESHOLDS="$WORK_DIR/thresholds.nc"
-export S3_HYDROSOS_THRESHOLDS="$S3_BASE_URI/thresholds.nc"
 
 export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="$S3_BASE_URI/routing-configs"
@@ -62,17 +60,7 @@ export S3_ANNUAL_TIMESERIES="$S3_BASE_URI/retrospective/annual-timeseries.zarr"
 export S3_ANNUAL_TIMESTEPS="$S3_BASE_URI/retrospective/annual-timesteps.zarr"
 export S3_ANNUAL_MAXIMUMS="$S3_BASE_URI/retrospective/annual-maximums.zarr"
 
-# prepare directory structure
-mkdir -p $WORK_DIR
-mkdir -p $OUTPUTS_DIR
-mkdir -p $ERA5_DIR
-mkdir -p $FINAL_STATES_DIR
-# make sure directory remains editable
-chmod -R 777 $OUTPUTS_DIR
-chmod -R 777 $ERA5_DIR
-chmod -R 777 $FINAL_STATES_DIR
-
-# check that the configs directory and both local zarrs exist and are not empty
+# check that the configs directory and all local copies of zarrs exist and are not empty
 if [ ! -d "$CONFIGS_DIR" ] || [ -z "$(ls -A $CONFIGS_DIR)" ]; then
     echo "Error: Configs directory is empty or does not exist."
     s5cmd --no-sign-request sync "$S3_CONFIGS_DIR/*" $CONFIGS_DIR
@@ -87,12 +75,26 @@ if [ ! -d "$DAILY_ZARR" ]; then
 fi
 if [ ! -d "$MONTHLY_TIMESERIES" ]; then
     echo "Monthly timeseries directory is empty or does not exist. Downloading a copy."
-    s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESERIES/*" $WORK_DIR/monthly-timeseries.zarr
+    s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_MONTHLY_TIMESERIES/*" $WORK_DIR/monthly-timeseries.zarr
 fi
 if [ ! -d "$MONTHLY_TIMESTEPS" ]; then
     echo "Monthly timesteps directory is empty or does not exist. Downloading a copy."
     s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESTEPS/*" $WORK_DIR/monthly-timesteps.zarr
 fi
+
+# prepare directory structure
+mkdir -p $WORK_DIR
+mkdir -p $OUTPUTS_DIR
+mkdir -p $ERA5_DIR
+mkdir -p $FINAL_STATES_DIR
+mkdir -p $FORECAST_INITS_DIR
+mkdir -p $HYDROSOS_DIR
+# make sure directory remains editable
+chmod -R 777 $OUTPUTS_DIR
+chmod -R 777 $ERA5_DIR
+chmod -R 777 $FINAL_STATES_DIR
+chmod -R 777 $FORECAST_INITS_DIR
+chmod -R 777 $HYDROSOS_DIR
 
 # run a setup/preparation/validation check
 python /home/ubuntu/retrospective-update/retrospective-update/prepare.py
@@ -136,15 +138,16 @@ s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HOURLY_ZARR/*" $S3_HOURLY_ZA
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$DAILY_ZARR/*" $S3_DAILY_ZARR/
 
 # prepare monthly derived products
+s5cmd --no-sign-request sync $S3_HYDROSOS_FILES $S3_HYDROSOS_DIR
 python /home/ubuntu/retrospective-update/retrospective-update/monthly_products.py
-if [ $? -ne 0 ]; then
-  echo "Error: Failed to run the monthly products script."
-  exit 1
-  # else synchronize the monthly products to S3
-else
+if [ $? -eq 0 ]; then
   s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
   s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*" $S3_HYDROSOS_DIR/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*.tif" S3_HYDROSOS_COGS/
+  rm -r $HYDROSOS_DIR/*.tif
+else
+  echo "Error: Failed to run the monthly products script."
+  exit 1
 fi
 
 # shutdown the machine
