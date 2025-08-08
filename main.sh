@@ -35,7 +35,7 @@ export S3_HYDROSOS_COGS="$S3_BASE_URI/hydrosos/cogs"
 export S3_HYDROSOS_FILES="$S3_BASE_URI/hydrosos/*.parquet"
 export HYDROSOS_ID_PAIRS="$WORK_DIR/hybas_linkno_pairs.parquet"
 export HYDROSOS_BASINS="$WORK_DIR/hydrobasins_level_4.parquet"
-export HYDROSOS_THRESHOLDS="$WORK_DIR/thresholds.nc"
+export HYDROSOS_THRESHOLDS="$WORK_DIR/thresholds.parquet"
 
 export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="$S3_BASE_URI/routing-configs"
@@ -143,7 +143,7 @@ python /home/ubuntu/retrospective-update/retrospective-update/monthly_products.p
 if [ $? -eq 0 ]; then
   s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
   s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*.tif" S3_HYDROSOS_COGS/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*.tif" $S3_HYDROSOS_COGS/
   rm -r $HYDROSOS_DIR/*.tif
 else
   echo "Error: Failed to run the monthly products script."
