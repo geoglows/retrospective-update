@@ -32,6 +32,12 @@ export ERA5_DIR="$WORK_DIR/era5"
 
 export HYDROSOS_DIR="$WORK_DIR/hydrosos"
 export S3_HYDROSOS_DIR="$S3_BASE_URI/hydrosos"
+export HYDROSOS_ID_PAIRS="$WORK_DIR/hybas_linkno_pairs.parquet"
+export S3_HYDROSOS_ID_PAIRS="$S3_BASE_URI/hybas_linkno_pairs.parquet"
+export HYDROSOS_BASINS="$WORK_DIR/hydrobasins_level_4.parquet"
+export S3_HYDROSOS_BASINS="$S3_BASE_URI/hydrobasins_level_4.parquet"
+export HYDROSOS_THRESHOLDS="$WORK_DIR/thresholds.nc"
+export S3_HYDROSOS_THRESHOLDS="$S3_BASE_URI/thresholds.nc"
 
 export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="$S3_BASE_URI/routing-configs"

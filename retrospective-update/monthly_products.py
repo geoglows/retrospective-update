@@ -1,4 +1,5 @@
 import os
+import traceback
 
 import geopandas as gpd
 import numpy as np
@@ -6,7 +7,7 @@ import pandas as pd
 import rasterio.features
 import xarray as xr
 from natsort import natsorted
-import traceback
+
 from cloud_logger import CloudLog
 from set_env_variables import (
     DAILY_ZARR, MONTHLY_TIMESERIES_ZARR, MONTHLY_TIMESTEPS_ZARR, HYDROSOS_DIR,
@@ -48,11 +49,10 @@ def update_monthly_products() -> None:
     cl.log('Appending to S3 monthly timesteps')
     ds.to_zarr(MONTHLY_TIMESTEPS_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
     cl.log('Finished appending monthly average products')
-    months_to_compute = ['2025-06-01']
 
     # for each month in months_to_compute, also make a hydrosos geotiff
     id_pairs = pd.read_parquet(HYDROSOS_ID_PAIRS)
-    thresholds_ds = xr.open_dataset(HYDROSOS_THRESHOLDS)
+    thresholds = pd.read_parquet(HYDROSOS_THRESHOLDS)
     basins = gpd.read_parquet(HYDROSOS_BASINS)
     hydrosos_color_map = {
         1: '#cd233f',  # red
@@ -65,26 +65,35 @@ def update_monthly_products() -> None:
         # now we want to combine columns with the same HYBAS_ID in the id_pairs dataframe
         discharges = (
             ds
-            .sel(river_id=id_pairs['LINKNO'].values, time=months_to_compute)
+            .sel(river_id=id_pairs['LINKNO'].unique(), time=months_to_compute)
             ['Q']
             .to_dataframe()
             .reset_index()
             .pivot(columns='time', index='river_id', values='Q')
             .reset_index()
             .merge(id_pairs, how='inner', left_on='river_id', right_on='LINKNO')
-            .drop(columns=['time', 'river_id', 'LINKNO'])
+            .drop(columns=['river_id', 'LINKNO'])
             .groupby('HYBAS_ID')
             .sum()
-            .reset_index()
         )
-        # convert the columns with dates to classes
-        # add a column called classes to discharge with a random integer from 1 to 5
-        discharges['classes'] = pd.Series(np.random.randint(1, 6, size=len(discharges))).map(hydrosos_color_map)
+        discharges.columns = pd.to_datetime(discharges.columns).strftime('%Y-%m-01')
+    # convert the columns with dates to classes
     for month in months_to_compute:
-        # select only ['HYBAS_ID', 'geometry'] from basins to clear previous iteration classes, if they exist
-        basins = basins[['HYBAS_ID', 'geometry']]
-        basins = basins.merge(discharges, on='HYBAS_ID', how='inner')
+        # select the rows where the month part of the multiindex is equal to the month we are iterating on
+        discharges = discharges.merge(
+            thresholds.xs(key=int(month.split('-')[1]), level='month'),
+            left_index=True, right_index=True, how='inner',
+        )
+        discharges['class'] = 1
+        discharges.loc[discharges[month] >= discharges['0.1'], 'class'] = 2
+        discharges.loc[discharges[month] >= discharges['0.25'], 'class'] = 3
+        discharges.loc[discharges[month] >= discharges['0.75'], 'class'] = 4
+        discharges.loc[discharges[month] >= discharges['0.9'], 'class'] = 5
+        discharges[month] = discharges['class']
+        discharges = discharges.drop(columns=['class', '0.1', '0.25', '0.75', '0.9'])
 
+    basins = basins.merge(discharges, on='HYBAS_ID', how='inner')
+    for month in months_to_compute:
         # create a raster for all the basin polygons
         output_path = os.path.join(HYDROSOS_DIR, f'{month[:-3]}.tif')
         resolution = 0.05
@@ -109,7 +118,7 @@ def update_monthly_products() -> None:
         with rasterio.open(output_path, 'w', **write_kwargs) as dst:
             dst.write(
                 rasterio.features.rasterize(
-                    [(geom, value) for geom, value in zip(basins.geometry, basins.classes)],
+                    [(geom, value) for geom, value in zip(basins.geometry, basins[month])],
                     out_shape=shape,
                     transform=transform,
                     fill=fill,
@@ -123,7 +132,6 @@ def update_monthly_products() -> None:
 if __name__ == '__main__':
     cl = CloudLog()
     cl.log('Updating monthly products')
-
     # determine the months which need to be updated
     # compare the months in the monthly zarr and the completed months available in the daily zarr
     try:
