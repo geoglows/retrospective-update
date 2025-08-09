@@ -3,7 +3,7 @@ import xarray as xr
 
 start_date = '1990-01-01'
 end_date = '2019-12-31'
-id_pairs = pd.read_parquet('../hybas_linkno_pairs.parquet')
+id_pairs = pd.read_parquet('./hybas_linkno_pairs.parquet')
 
 quantiles = [0.1, 0.25, 0.75, 0.9]
 df = (

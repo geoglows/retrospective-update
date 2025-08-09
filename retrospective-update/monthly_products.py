@@ -26,28 +26,39 @@ def update_monthly_products() -> None:
     months_available = set(dates_available.strftime('%Y-%m-01'))
 
     # check if the last month in the daily zarr has the last day of the month available
-    if dates_available[-1].day != pd.to_datetime(dates_available[-1]).days_in_month:
+    if dates_available[-1].day != dates_available[-1].days_in_month:
         months_available.remove(dates_available[-1].strftime('%Y-%m-01'))
 
     # determine which months are missing and should be computed
     months_to_compute = set(months_available) - set(months_calculated)
     months_to_compute = natsorted(list(months_to_compute))
     if not months_to_compute:
-        cl.log("No months to compute, all monthly products are up to date.")
-        exit(0)
+        cl.error("No months to compute, all monthly products are up to date.")
+        raise RuntimeError('No months compute.')
     cl.log(f"Months to compute: {months_to_compute}")
 
     # filter the dataset to only the months that need to be computed, average them, and append to the monthly zarrs
     daily_zarr = (
         daily_zarr
-        .sel(time=dates_available.strftime('%Y-%m-01').isin(months_to_compute))
+        .isel(time=dates_available.strftime('%Y-%m-01').isin(months_to_compute))
         .resample(time='MS')  # MS -> Month Start
         .mean()
     )
-    cl.log('Appending to S3 monthly timeseries')
-    daily_zarr.to_zarr(MONTHLY_TIMESERIES, mode='a', append_dim='time', consolidated=True, zarr_format=2)
-    cl.log('Appending to S3 monthly timesteps')
-    daily_zarr.to_zarr(MONTHLY_TIMESTEPS, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+    # remove all the chunks encoding
+    daily_zarr.encoding.pop('chunks', None)
+    daily_zarr.Q.encoding.pop('chunks', None)
+    cl.log('Appending to monthly timeseries')
+    (
+        daily_zarr
+        .chunk({'time': 1020, 'river_id': 200})
+        .to_zarr(MONTHLY_TIMESERIES, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+    )
+    cl.log('Appending to monthly timesteps')
+    (
+        daily_zarr
+        .chunk({'time': 1, 'river_id': 2_500_000})
+        .to_zarr(MONTHLY_TIMESTEPS, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+    )
 
     # for each month in months_to_compute, also make a hydrosos geotiff
     cl.log('Preparing HydroSOS COGs')
@@ -64,7 +75,6 @@ def update_monthly_products() -> None:
     color_to_rgb = lambda hex_color: tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
     hydrosos_rgb_map = {k: color_to_rgb(v) for k, v in hydrosos_color_map.items()}
     with xr.open_zarr(MONTHLY_TIMESTEPS) as ds:
-        # now we want to combine columns with the same HYBAS_ID in the id_pairs dataframe
         discharges = (
             ds
             .sel(river_id=id_pairs['LINKNO'].unique(), time=months_to_compute)

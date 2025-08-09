@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 # first sleep for 5 minutes to allow for users to cancel the job
-sleep 300
+#sleep 300
 
-# try to activate the conda environment
-source /home/ubuntu/miniconda3/bin/activate
-conda activate env
-if [ $? -ne 0 ]; then
-    echo "Error: Failed to activate conda environment."
-    exit 1
-fi
+## try to activate the conda environment
+#source /home/ubuntu/miniconda3/bin/activate
+#conda activate env
+#if [ $? -ne 0 ]; then
+#    echo "Error: Failed to activate conda environment."
+#    exit 1
+#fi
 
 # check that the necessary packages are installed and in the PATH
 commands=("curl" "python" "s5cmd")
@@ -22,7 +22,8 @@ done
 
 # Environment variables
 export WEBHOOK_URL=""
-export WORK_DIR="/data"
+export SCRIPTS_ROOT="/Users/rchales/code/retrospective-update/retrospective-update"
+export WORK_DIR="/Users/rchales/data/localretroupdate"
 export S3_BASE_URI="s3://geoglows-v2"
 export CDSAPI_RC="/home/ubuntu/cdsapirc.txt"
 export AWS_CREDENTIALS_FILE="/home/ubuntu/awscredentials"
@@ -33,9 +34,9 @@ export ERA5_DIR="$WORK_DIR/era5"
 export HYDROSOS_DIR="$WORK_DIR/hydrosos"
 export S3_HYDROSOS_COGS="$S3_BASE_URI/hydrosos/cogs"
 export S3_HYDROSOS_FILES="$S3_BASE_URI/hydrosos/*.parquet"
-export HYDROSOS_ID_PAIRS="$WORK_DIR/hybas_linkno_pairs.parquet"
-export HYDROSOS_BASINS="$WORK_DIR/hydrobasins_level_4.parquet"
-export HYDROSOS_THRESHOLDS="$WORK_DIR/thresholds.parquet"
+export HYDROSOS_ID_PAIRS="$HYDROSOS_DIR/hybas_linkno_pairs.parquet"
+export HYDROSOS_BASINS="$HYDROSOS_DIR/hydrobasins_level_4.parquet"
+export HYDROSOS_THRESHOLDS="$HYDROSOS_DIR/thresholds.parquet"
 
 export CONFIGS_DIR="$WORK_DIR/routing-configs"
 export S3_CONFIGS_DIR="$S3_BASE_URI/routing-configs"
@@ -97,21 +98,21 @@ chmod -R 777 $FORECAST_INITS_DIR
 chmod -R 777 $HYDROSOS_DIR
 
 # run a setup/preparation/validation check
-python /home/ubuntu/retrospective-update/retrospective-update/prepare.py
+python $SCRIPTS_ROOT/prepare.py
 if [ $? -ne 0 ]; then
     echo "Error identified when preparing for computations."
     exit 1
 fi
 
 # era5 download script
-python /home/ubuntu/retrospective-update/retrospective-update/download_era5.py
+python $SCRIPTS_ROOT/download_era5.py
 if [ $? -ne 0 ]; then
     echo "Error: Failed to run the ERA5 download script."
     exit 1
 fi
 
 # routing script
-python /home/ubuntu/retrospective-update/retrospective-update/route.py
+python $SCRIPTS_ROOT/route.py
 if [ $? -ne 0 ]; then
     echo "Error: Failed to run the routing script."
     rm -r $OUTPUTS_DIR
@@ -123,7 +124,7 @@ s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$FINAL_STATES_DIR/*" $S3_FINA
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$FORECAST_INITS_DIR/*" $S3_FORECAST_INITS_DIR/
 
 # append the discharge to zarrs
-python /home/ubuntu/retrospective-update/retrospective-update/append_discharge.py
+python $SCRIPTS_ROOT/append_discharge.py
 if [ $? -ne 0 ]; then
   echo "Error: Failed to run the appending script."
   exit 1
@@ -138,16 +139,12 @@ s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HOURLY_ZARR/*" $S3_HOURLY_ZA
 s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$DAILY_ZARR/*" $S3_DAILY_ZARR/
 
 # prepare monthly derived products
-s5cmd --no-sign-request sync $S3_HYDROSOS_FILES $S3_HYDROSOS_DIR
-python /home/ubuntu/retrospective-update/retrospective-update/monthly_products.py
+python $SCRIPTS_ROOT/monthly_products.py
 if [ $? -eq 0 ]; then
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*.tif" $S3_HYDROSOS_COGS/
+  s5cmd --profile odp cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
+  s5cmd --profile odp cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
+  s5cmd --profile odp cp "$HYDROSOS_DIR/*.tif" $S3_HYDROSOS_COGS/
   rm -r $HYDROSOS_DIR/*.tif
-else
-  echo "Error: Failed to run the monthly products script."
-  exit 1
 fi
 
 # shutdown the machine
