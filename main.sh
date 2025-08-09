@@ -141,9 +141,9 @@ s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$DAILY_ZARR/*" $S3_DAILY_ZARR
 # prepare monthly derived products
 python $SCRIPTS_ROOT/monthly_products.py
 if [ $? -eq 0 ]; then
-  s5cmd --profile odp cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
-  s5cmd --profile odp cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
-  s5cmd --profile odp cp "$HYDROSOS_DIR/*.tif" $S3_HYDROSOS_COGS/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*.tif" $S3_HYDROSOS_COGS/
   rm -r $HYDROSOS_DIR/*.tif
 fi
 
