@@ -45,7 +45,7 @@ export FINAL_STATES_DIR="$WORK_DIR/final-states"
 export S3_FINAL_STATES_DIR="$S3_BASE_URI/retrospective/final-states"
 
 export FORECAST_INITS_DIR="$WORK_DIR/forecast-inits"
-export S3_FORECAST_INITS_DIR="$S3_BASE_URI/retrospective/forcast-inits"
+export S3_FORECAST_INITS_DIR="$S3_BASE_URI/retrospective/forecast-inits"
 
 export HOURLY_ZARR="$WORK_DIR/hourly.zarr"
 export DAILY_ZARR="$WORK_DIR/daily.zarr"
