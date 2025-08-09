@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 
 # first sleep for 5 minutes to allow for users to cancel the job
-#sleep 300
+sleep 300
 
-## try to activate the conda environment
-#source /home/ubuntu/miniconda3/bin/activate
-#conda activate env
-#if [ $? -ne 0 ]; then
-#    echo "Error: Failed to activate conda environment."
-#    exit 1
-#fi
+# try to activate the conda environment
+source /home/ubuntu/miniconda3/bin/activate
+conda activate env
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to activate conda environment."
+    exit 1
+fi
 
 # check that the necessary packages are installed and in the PATH
 commands=("curl" "python" "s5cmd")
@@ -22,8 +22,8 @@ done
 
 # Environment variables
 export WEBHOOK_URL=""
-export SCRIPTS_ROOT="/Users/rchales/code/retrospective-update/retrospective-update"
-export WORK_DIR="/Users/rchales/data/localretroupdate"
+export SCRIPTS_ROOT="/home/ubuntu/retrospective-update/retrospective-update"
+export WORK_DIR="/data"
 export S3_BASE_URI="s3://geoglows-v2"
 export CDSAPI_RC="/home/ubuntu/cdsapirc.txt"
 export AWS_CREDENTIALS_FILE="/home/ubuntu/awscredentials"
