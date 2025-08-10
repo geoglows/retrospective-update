@@ -4,7 +4,9 @@ import traceback
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import rasterio
 import rasterio.features
+import rasterio.transform
 import xarray as xr
 from natsort import natsorted
 
@@ -15,7 +17,7 @@ from set_env_variables import (
 )
 
 
-def update_monthly_products() -> None:
+def update_monthly_products(cl: CloudLog) -> None:
     # check which months are on the monthly datasets
     with xr.open_zarr(MONTHLY_TIMESTEPS) as ds:
         months_calculated = set(ds.time.dt.strftime('%Y-%m-01').values)
@@ -33,8 +35,8 @@ def update_monthly_products() -> None:
     months_to_compute = set(months_available) - set(months_calculated)
     months_to_compute = natsorted(list(months_to_compute))
     if not months_to_compute:
-        cl.error("No months to compute, all monthly products are up to date.")
-        raise RuntimeError('No months compute.')
+        cl.log("No months to compute, all monthly products are up to date.")
+        return
     cl.log(f"Months to compute: {months_to_compute}")
 
     # filter the dataset to only the months that need to be computed, average them, and append to the monthly zarrs
@@ -150,7 +152,7 @@ if __name__ == '__main__':
     # determine the months which need to be updated
     # compare the months in the monthly zarr and the completed months available in the daily zarr
     try:
-        update_monthly_products()
+        update_monthly_products(cl)
         exit(0)
     except Exception as e:
         cl.error(f"Error updating monthly products: {e}")
