@@ -21,7 +21,8 @@ for cmd in "${commands[@]}"; do
 done
 
 # Environment variables
-export WEBHOOK_URL=""
+export WEBHOOK_LOG_URL=""
+export WEBHOOK_ERROR_URL=""
 export SCRIPTS_ROOT="/home/ubuntu/retrospective-update/retrospective-update"
 export WORK_DIR="/data"
 export S3_BASE_URI="s3://geoglows-v2"
@@ -52,10 +53,10 @@ export DAILY_ZARR="$WORK_DIR/daily.zarr"
 export S3_HOURLY_ZARR="$S3_BASE_URI/retrospective/hourly.zarr"
 export S3_DAILY_ZARR="$S3_BASE_URI/retrospective/daily.zarr"
 
-export MONTHLY_TIMESERIES="$WORK_DIR/monthly-timeseries.zarr"
-export MONTHLY_TIMESTEPS="$WORK_DIR/monthly-timesteps.zarr"
-export S3_MONTHLY_TIMESERIES="$S3_BASE_URI/retrospective/monthly-timeseries.zarr"
-export S3_MONTHLY_TIMESTEPS="$S3_BASE_URI/retrospective/monthly-timesteps.zarr"
+export MONTHLY_TIMESERIES_ZARR="$WORK_DIR/monthly-timeseries.zarr"
+export MONTHLY_TIMESTEPS_ZARR="$WORK_DIR/monthly-timesteps.zarr"
+export S3_MONTHLY_TIMESERIES_ZARR="$S3_BASE_URI/retrospective/monthly-timeseries.zarr"
+export S3_MONTHLY_TIMESTEPS_ZARR="$S3_BASE_URI/retrospective/monthly-timesteps.zarr"
 
 export S3_ANNUAL_TIMESERIES="$S3_BASE_URI/retrospective/annual-timeseries.zarr"
 export S3_ANNUAL_TIMESTEPS="$S3_BASE_URI/retrospective/annual-timesteps.zarr"
@@ -74,28 +75,19 @@ if [ ! -d "$DAILY_ZARR" ]; then
     echo "Daily zarr directory is empty or does not exist. Downloading a copy."
     s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_DAILY_ZARR/*" $DAILY_ZARR
 fi
-if [ ! -d "$MONTHLY_TIMESERIES" ]; then
+if [ ! -d "$MONTHLY_TIMESERIES_ZARR" ]; then
     echo "Monthly timeseries directory is empty or does not exist. Downloading a copy."
-    s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_MONTHLY_TIMESERIES/*" $WORK_DIR/monthly-timeseries.zarr
+    s5cmd --no-sign-request sync --exclude "*Q/0.*" "$S3_MONTHLY_TIMESERIES_ZARR/*" $WORK_DIR/monthly-timeseries.zarr
 fi
-if [ ! -d "$MONTHLY_TIMESTEPS" ]; then
+if [ ! -d "$MONTHLY_TIMESTEPS_ZARR" ]; then
     echo "Monthly timesteps directory is empty or does not exist. Downloading a copy."
-    s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESTEPS/*" $WORK_DIR/monthly-timesteps.zarr
+    s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESTEPS_ZARR/*" $WORK_DIR/monthly-timesteps.zarr
 fi
 
 # prepare directory structure
-mkdir -p $WORK_DIR
-mkdir -p $OUTPUTS_DIR
-mkdir -p $ERA5_DIR
-mkdir -p $FINAL_STATES_DIR
-mkdir -p $FORECAST_INITS_DIR
-mkdir -p $HYDROSOS_DIR
+mkdir -p $WORK_DIR $OUTPUTS_DIR $ERA5_DIR $FINAL_STATES_DIR $FORECAST_INITS_DIR $HYDROSOS_DIR
 # make sure directory remains editable
-chmod -R 777 $OUTPUTS_DIR
-chmod -R 777 $ERA5_DIR
-chmod -R 777 $FINAL_STATES_DIR
-chmod -R 777 $FORECAST_INITS_DIR
-chmod -R 777 $HYDROSOS_DIR
+chmod -R 777 $OUTPUTS_DIR $ERA5_DIR $FINAL_STATES_DIR $FORECAST_INITS_DIR $HYDROSOS_DIR
 
 # run a setup/preparation/validation check
 python $SCRIPTS_ROOT/prepare.py
@@ -141,12 +133,12 @@ s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$DAILY_ZARR/*" $S3_DAILY_ZARR
 # prepare monthly derived products
 python $SCRIPTS_ROOT/monthly_products.py
 if [ $? -eq 0 ]; then
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES/
-  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timeseries.zarr/*" $S3_MONTHLY_TIMESERIES_ZARR/
+  s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$WORK_DIR/monthly-timesteps.zarr/*" $S3_MONTHLY_TIMESTEPS_ZARR/
   s5cmd --credentials-file $AWS_CREDENTIALS_FILE cp "$HYDROSOS_DIR/*.tif" $S3_HYDROSOS_COGS/
   rm -r $HYDROSOS_DIR/*.tif
 fi
 
 # shutdown the machine
-curl -X POST -H "Content-Type: application/json" -d '{"text": "All tasks completed successfully. Shutting down the machine."}' $WEBHOOK_URL
+curl -X POST -H "Content-Type: application/json" -d '{"text": "All tasks completed successfully. Shutting down the machine."}' $WEBHOOK_LOG_URL
 sudo shutdown -h now

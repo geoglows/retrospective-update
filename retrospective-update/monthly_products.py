@@ -12,14 +12,14 @@ from natsort import natsorted
 
 from cloud_logger import CloudLog
 from set_env_variables import (
-    DAILY_ZARR, MONTHLY_TIMESERIES, MONTHLY_TIMESTEPS, HYDROSOS_DIR,
+    DAILY_ZARR, MONTHLY_TIMESERIES_ZARR, MONTHLY_TIMESTEPS_ZARR, HYDROSOS_DIR,
     HYDROSOS_ID_PAIRS, HYDROSOS_THRESHOLDS, HYDROSOS_BASINS
 )
 
 
 def update_monthly_products(cl: CloudLog) -> None:
     # check which months are on the monthly datasets
-    with xr.open_zarr(MONTHLY_TIMESTEPS) as ds:
+    with xr.open_zarr(MONTHLY_TIMESTEPS_ZARR) as ds:
         months_calculated = set(ds.time.dt.strftime('%Y-%m-01').values)
 
     # check which months are in the local daily zarr
@@ -53,13 +53,13 @@ def update_monthly_products(cl: CloudLog) -> None:
     (
         daily_zarr
         .chunk({'time': 1020, 'river_id': 200})
-        .to_zarr(MONTHLY_TIMESERIES, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+        .to_zarr(MONTHLY_TIMESERIES_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
     )
     cl.log('Appending to monthly timesteps')
     (
         daily_zarr
         .chunk({'time': 1, 'river_id': 2_500_000})
-        .to_zarr(MONTHLY_TIMESTEPS, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+        .to_zarr(MONTHLY_TIMESTEPS_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
     )
 
     # for each month in months_to_compute, also make a hydrosos geotiff
@@ -76,7 +76,7 @@ def update_monthly_products(cl: CloudLog) -> None:
     }
     color_to_rgb = lambda hex_color: tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
     hydrosos_rgb_map = {k: color_to_rgb(v) for k, v in hydrosos_color_map.items()}
-    with xr.open_zarr(MONTHLY_TIMESTEPS) as ds:
+    with xr.open_zarr(MONTHLY_TIMESTEPS_ZARR) as ds:
         discharges = (
             ds
             .sel(river_id=id_pairs['LINKNO'].unique(), time=months_to_compute)
