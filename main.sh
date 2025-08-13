@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-+set -Eeuo pipefail
+set -Eeuo pipefail
 
 # read the environment variables at ./variables.env relative to the location of this script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
