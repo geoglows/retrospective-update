@@ -17,14 +17,14 @@ def concatenate_outputs() -> None:
     vpu_outputs = natsorted(glob(os.path.join(OUTPUTS_DIR, '*')))
     unique_outputs = [os.path.basename(f) for f in natsorted(glob(os.path.join(vpu_outputs[0], '*')))]
     if not unique_outputs:
-        cl.error(f"No-Qout-files-found")
-        raise FileNotFoundError(f"No Qout files found in {OUTPUTS_DIR}")
+        cl.error(f"No Qout files found in {OUTPUTS_DIR}")
+        raise FileNotFoundError
 
     for unique_output in unique_outputs:
         discharges = list(natsorted(glob(os.path.join(OUTPUTS_DIR, '*', unique_output))))
         if not len(discharges) == len(vpu_outputs):
-            cl.error('Discharge-not-found-for-every-vpu')
-            raise FileNotFoundError(f"Discharge-not-found-for-{unique_output}")
+            cl.error(f"Discharge not found for {unique_output}")
+            raise FileNotFoundError
 
         with xr.open_mfdataset(discharges, combine='nested', concat_dim='river_id', parallel=True, ) as new_ds:
             earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
@@ -35,8 +35,8 @@ def concatenate_outputs() -> None:
             # check that the time steps are not already
             hourly_times = xr.open_zarr(HOURLY_ZARR).time.values
             if new_ds.time.values[0] in hourly_times:
-                cl.error(f'hourly steps already present for {earliest_date} to {latest_date}')
-                raise RuntimeError(f'Hourly data found for {earliest_date} to {latest_date}. Needs human intervention.')
+                cl.error(f'hourly steps already present for {earliest_date} to {latest_date}. Needs human intervention.')
+                raise RuntimeError
             cl.log(f'Appending to hourly time step zarr {earliest_date} to {latest_date}')
             new_ds.to_zarr(HOURLY_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
             cl.log('Finished appending to hourly zarr')
@@ -45,8 +45,8 @@ def concatenate_outputs() -> None:
             new_ds = new_ds.resample(time='1D').mean('time')
             daily_times = xr.open_zarr(DAILY_ZARR).time.values
             if new_ds.time.values[0] in daily_times:
-                cl.error(f'daily steps already present for {earliest_date} to {latest_date}')
-                raise RuntimeError(f'Daily data found for {earliest_date} to {latest_date}. Needs human intervention.')
+                cl.error(f'Daily data found for {earliest_date} to {latest_date}. Needs human intervention.')
+                raise RuntimeError
             cl.log(f'Appending to daily time step zarr {earliest_date} to {latest_date}')
             new_ds.to_zarr(DAILY_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
             cl.log('Finished appending to daily zarr')
@@ -68,8 +68,8 @@ def verify_concatenated_outputs(zarr) -> None:
         # Verify that the time dimension is correct
         times = ds['time'].values
         if not np.all(np.diff(times) == times[1] - times[0]):
-            cl.error(f'Time-dimension-of-{zarr}-is-incorrect')
-            raise RuntimeError(f'Time dimension of {zarr} zarr is not correct')
+            cl.error(f'Time dimension of {zarr} zarr is not correct')
+            raise RuntimeError
 
 
 if __name__ == '__main__':
@@ -82,6 +82,6 @@ if __name__ == '__main__':
         for z in [DAILY_ZARR, HOURLY_ZARR]:
             verify_concatenated_outputs(z)
     except Exception as e:
-        cl.error(f'Failed to append new discharge to existing zarrs. {str(e)}')
-        print(traceback.format_exc())
+        cl.error(str(e))
+        cl.error(traceback.format_exc())
         exit(1)

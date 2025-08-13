@@ -149,12 +149,10 @@ def update_monthly_products(cl: CloudLog) -> None:
 if __name__ == '__main__':
     cl = CloudLog()
     cl.log('Updating monthly products')
-    # determine the months which need to be updated
-    # compare the months in the monthly zarr and the completed months available in the daily zarr
     try:
         update_monthly_products(cl)
         exit(0)
     except Exception as e:
-        cl.error(f"Error updating monthly products: {e}")
+        cl.error(str(e))
         cl.error(traceback.format_exc())
-        raise e
+        exit(1)

@@ -175,7 +175,7 @@ if __name__ == '__main__':
         init_timestamp_era5 = init_timestamp_era5.strftime('%Y%m%d%H%M')
         if init_timestamp != init_timestamp_era5:
             cl.error('Last time step in the zarr timeseries is different than the first era5')
-            raise RuntimeError('Last time step in the zarr timeseries is different than the first era5')
+            raise RuntimeError
         vpus = natsorted(glob(os.path.join(CONFIGS_DIR, '*')))
 
         with Pool(os.cpu_count()) as p:
@@ -196,6 +196,6 @@ if __name__ == '__main__':
             )
         exit(0)
     except Exception as e:
-        cl.error(e)
-        print(traceback.format_exc())
+        cl.error(str(e))
+        cl.error(traceback.format_exc())
         exit(1)
