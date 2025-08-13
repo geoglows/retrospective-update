@@ -53,21 +53,20 @@ chmod -R 777 "$OUTPUTS_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR
 
 # run a setup/preparation/validation check
 if ! python "$SCRIPTS_ROOT"/prepare.py; then
-    echo "Error identified when preparing for computations."
-    exit 1
+    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to validate the environment. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
+    sudo shutdown -h now
 fi
 
 # era5 download script
 if ! python "$SCRIPTS_ROOT"/download_era5.py; then
-    echo "Error: Failed to run the ERA5 download script."
-    exit 1
+    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to download ERA5 data. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
+    sudo shutdown -h now
 fi
 
 # routing script
 if ! python "$SCRIPTS_ROOT"/route.py; then
-    echo "Error: Failed to run the routing script."
-    rm -r "$OUTPUTS_DIR"
-    exit 1
+    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to route data. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
+    sudo shutdown -h now
 fi
 
 # synchronize inits to s3
@@ -76,8 +75,7 @@ s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$FORECAST_INITS_DIR/*" "$S3
 
 # append the discharge to zarrs
 if ! python "$SCRIPTS_ROOT"/append_discharge.py; then
-  echo "Error: Failed to run the appending script."
-  exit 1
+  sudo shutdown -h now
 fi
 
 # clean up any existing data that shouldn't be there anymore
@@ -96,5 +94,5 @@ if python "$SCRIPTS_ROOT"/monthly_products.py; then
 fi
 
 # shutdown the machine. || true makes sure that the script does not exit on failed posts and will always hit the shutdown command
-curl -X POST -H "Content-Type: application/json" -d '{"text": "All tasks completed successfully. Shutting down the machine."}' "$WEBHOOK_LOG_URL" || true
+curl -X POST -H "Content-Type: application/json" -d '{"text": "Normal script end. Shutting down."}' "$WEBHOOK_LOG_URL" || true
 sudo shutdown -h now
