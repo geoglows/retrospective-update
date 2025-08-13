@@ -75,7 +75,8 @@ s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$FORECAST_INITS_DIR/*" "$S3
 
 # append the discharge to zarrs
 if ! python "$SCRIPTS_ROOT"/append_discharge.py; then
-  sudo shutdown -h now
+    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to append discharge to zarrs. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
+    sudo shutdown -h now
 fi
 
 # clean up any existing data that shouldn't be there anymore
@@ -91,6 +92,9 @@ if python "$SCRIPTS_ROOT"/monthly_products.py; then
   s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timesteps.zarr/*" "$S3_MONTHLY_TIMESTEPS_ZARR"/
   s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$HYDROSOS_DIR/*.tif" "$S3_HYDROSOS_COGS"/
   rm -r "$HYDROSOS_DIR"/*.tif
+else
+  curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to prepare monthly derived products. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
+  sudo shutdown -h now
 fi
 
 # shutdown the machine. || true makes sure that the script does not exit on failed posts and will always hit the shutdown command
