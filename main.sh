@@ -1,26 +1,30 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+log_and_shutdown() {
+    local message="$1"
+    curl -X POST -H "Content-Type: application/json" -d "{\"text\": \"$message\"}" "$WEBHOOK_ERROR_URL" || true
+    sudo shutdown -h now
+}
+
 # read the environment variables at ./variables.env relative to the location of this script
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 source "$SCRIPT_DIR"/variables.env
 
-# first sleep for 5 minutes to allow for users to cancel the job
+# sleep to give users time to log on and cancel the job if this is not a normally scheduled run
 sleep "$SLEEP_LENGTH"
 
 # try to activate conda then the environment
 source "$CONDA_ACTIVATE_PATH"
 if ! conda activate env; then
-    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to activate conda environment."}' "$WEBHOOK_ERROR_URL" || true
-    sudo shutdown -h now
+    log_and_shutdown "Failed to activate conda environment."
 fi
 
 # check that the necessary packages are installed and in the PATH
 commands=("curl" "python" "s5cmd")
 for cmd in "${commands[@]}"; do
     if ! command -v "$cmd" &> /dev/null; then
-      curl -X POST -H "Content-Type: application/json" -d '{"text": "Environment variables not set"}' "$WEBHOOK_ERROR_URL" || true
-      sudo shutdown -h now
+        log_and_shutdown "Required command '$cmd' is not available in the PATH."
     fi
 done
 
@@ -46,59 +50,43 @@ if [ ! -d "$MONTHLY_TIMESTEPS_ZARR" ]; then
     s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESTEPS_ZARR/*" "$WORK_DIR"/monthly-timesteps.zarr
 fi
 
-# clear any existing discharge to avoid collisions when appending. Inits and hydrosos data are handled separately
+# Prepare directories
 rm -rf "$DISCHARGE_DIR" "$FORECAST_INITS_DIR"
-# prepare directory structure
 mkdir -p "$WORK_DIR" "$DISCHARGE_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR" "$HYDROSOS_DIR"
-# make sure directories remain editable
 chmod -R 777 "$DISCHARGE_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR" "$HYDROSOS_DIR"
 
-# run a setup/preparation/validation check
 if ! python "$SCRIPTS_ROOT"/prepare.py; then
-    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to validate the environment. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
-    sudo shutdown -h now
+    log_and_shutdown "Failed to validate the environment. Shutting down."
 fi
 
-# era5 download script
 if ! python "$SCRIPTS_ROOT"/download_era5.py; then
-    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to download ERA5 data. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
-    sudo shutdown -h now
+    log_and_shutdown "Failed to download ERA5 data. Shutting down."
 fi
 
-# routing script
 if ! python "$SCRIPTS_ROOT"/route.py; then
-    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to route data. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
-    sudo shutdown -h now
+    log_and_shutdown "Failed to route data. Shutting down."
 fi
 
-# synchronize inits to s3
+# synchronize inits only to s3 so they are available asap
 s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$FINAL_STATES_DIR/*" "$S3_FINAL_STATES_DIR"/
 s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$FORECAST_INITS_DIR/*" "$S3_FORECAST_INITS_DIR"/
 
-# append the discharge to zarrs
 if ! python "$SCRIPTS_ROOT"/append_discharge.py; then
-    curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to append discharge to zarrs. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
-    sudo shutdown -h now
+    log_and_shutdown "Failed to append discharge to zarrs. Shutting down."
 fi
 
-# clean up any existing data that shouldn't be there anymore
-rm -r "$DISCHARGE_DIR" "$ERA5_DIR"
-
-# sync to s3
 s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$HOURLY_ZARR/*" "$S3_HOURLY_ZARR"/
 s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$DAILY_ZARR/*" "$S3_DAILY_ZARR"/
 
-# prepare monthly derived products
+rm -r "$DISCHARGE_DIR" "$ERA5_DIR"
+
 if python "$SCRIPTS_ROOT"/monthly_products.py; then
   s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timeseries.zarr/*" "$S3_MONTHLY_TIMESERIES_ZARR"/
   s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timesteps.zarr/*" "$S3_MONTHLY_TIMESTEPS_ZARR"/
   s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$HYDROSOS_DIR/*.tif" "$S3_HYDROSOS_COGS"/
   rm -r "$HYDROSOS_DIR"/*.tif
 else
-  curl -X POST -H "Content-Type: application/json" -d '{"text": "Failed to prepare monthly derived products. Shutting down."}' "$WEBHOOK_ERROR_URL" || true
-  sudo shutdown -h now
+  log_and_shutdown "Failed to prepare monthly derived products. Shutting down."
 fi
 
-# shutdown the machine. || true makes sure that the script does not exit on failed posts and will always hit the shutdown command
-curl -X POST -H "Content-Type: application/json" -d '{"text": "Normal script end. Shutting down."}' "$WEBHOOK_LOG_URL" || true
-sudo shutdown -h now
+log_and_shutdown "Script completed successfully. Shutting down."
