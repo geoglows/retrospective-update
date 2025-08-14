@@ -46,10 +46,12 @@ if [ ! -d "$MONTHLY_TIMESTEPS_ZARR" ]; then
     s5cmd --no-sign-request sync "$S3_MONTHLY_TIMESTEPS_ZARR/*" "$WORK_DIR"/monthly-timesteps.zarr
 fi
 
+# clear any existing discharge to avoid collisions when appending. Inits and hydrosos data are handled separately
+rm -rf "$DISCHARGE_DIR" "$FORECAST_INITS_DIR"
 # prepare directory structure
-mkdir -p "$WORK_DIR" "$OUTPUTS_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR" "$HYDROSOS_DIR"
+mkdir -p "$WORK_DIR" "$DISCHARGE_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR" "$HYDROSOS_DIR"
 # make sure directories remain editable
-chmod -R 777 "$OUTPUTS_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR" "$HYDROSOS_DIR"
+chmod -R 777 "$DISCHARGE_DIR" "$ERA5_DIR" "$FINAL_STATES_DIR" "$FORECAST_INITS_DIR" "$HYDROSOS_DIR"
 
 # run a setup/preparation/validation check
 if ! python "$SCRIPTS_ROOT"/prepare.py; then
@@ -80,7 +82,7 @@ if ! python "$SCRIPTS_ROOT"/append_discharge.py; then
 fi
 
 # clean up any existing data that shouldn't be there anymore
-rm -r "$OUTPUTS_DIR" "$ERA5_DIR"
+rm -r "$DISCHARGE_DIR" "$ERA5_DIR"
 
 # sync to s3
 s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$HOURLY_ZARR/*" "$S3_HOURLY_ZARR"/

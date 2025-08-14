@@ -6,7 +6,7 @@ MIN_LAG_TIME_DAYS = int(os.getenv('MIN_LAG_TIME_DAYS', 5))
 DATA_DIR = os.getenv('WORK_DIR')
 ERA5_DIR = os.getenv('ERA5_DIR')
 CONFIGS_DIR = os.getenv('CONFIGS_DIR')
-OUTPUTS_DIR = os.getenv('OUTPUTS_DIR')
+DISCHARGE_DIR = os.getenv('DISCHARGE_DIR')
 
 S3_CONFIGS_DIR = os.getenv('S3_CONFIGS_DIR')
 

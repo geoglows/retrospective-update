@@ -8,20 +8,20 @@ from natsort import natsorted
 
 from cloud_logger import CloudLog
 from set_env_variables import (
-    DAILY_ZARR, HOURLY_ZARR, OUTPUTS_DIR
+    DAILY_ZARR, HOURLY_ZARR, DISCHARGE_DIR
 )
 
 
 def concatenate_outputs() -> None:
     # for each unique start date, sorted in order, open/merge the files from all vpus and append to the zarr
-    vpu_outputs = natsorted(glob(os.path.join(OUTPUTS_DIR, '*')))
+    vpu_outputs = natsorted(glob(os.path.join(DISCHARGE_DIR, '*')))
     unique_outputs = [os.path.basename(f) for f in natsorted(glob(os.path.join(vpu_outputs[0], '*')))]
     if not unique_outputs:
-        cl.error(f"No Qout files found in {OUTPUTS_DIR}")
+        cl.error(f"No Qout files found in {DISCHARGE_DIR}")
         raise FileNotFoundError
 
     for unique_output in unique_outputs:
-        discharges = list(natsorted(glob(os.path.join(OUTPUTS_DIR, '*', unique_output))))
+        discharges = list(natsorted(glob(os.path.join(DISCHARGE_DIR, '*', unique_output))))
         if not len(discharges) == len(vpu_outputs):
             cl.error(f"Discharge not found for {unique_output}")
             raise FileNotFoundError

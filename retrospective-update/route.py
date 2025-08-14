@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 from cloud_logger import CloudLog
 from set_env_variables import (
-    FINAL_STATES_DIR, CONFIGS_DIR, OUTPUTS_DIR, FORECAST_INITS_DIR, ERA5_DIR, HOURLY_ZARR
+    FINAL_STATES_DIR, CONFIGS_DIR, DISCHARGE_DIR, FORECAST_INITS_DIR, ERA5_DIR, HOURLY_ZARR
 )
 
 
@@ -36,7 +36,7 @@ def route_vpu(args):
     if not os.path.exists(initial_state_file):
         raise FileNotFoundError(f"Initial state file not found: {initial_state_file}")
 
-    outdir = os.path.join(OUTPUTS_DIR, vpu)
+    outdir = os.path.join(DISCHARGE_DIR, vpu)
     os.makedirs(outdir, exist_ok=True)
 
     output_files = [
