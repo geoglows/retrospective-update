@@ -12,6 +12,23 @@ from set_env_variables import (
 )
 
 
+def append(new_ds: xr.Dataset, zarr_path: str) -> None:
+    # check that the time steps are not already
+    earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
+    latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
+    existing_times = xr.open_zarr(zarr_path).time.values
+    if new_ds.time.values[0] in existing_times:
+        cl.error(f'Time steps for {earliest_date} to {latest_date} already in zarr. Needs human intervention.')
+        raise RuntimeError
+    if new_ds.river_id.shape != xr.open_zarr(zarr_path).river_id.shape:
+        cl.error(f'River id shape mismatch. Probably corrupt or missing netcdfs.')
+        raise RuntimeError
+    cl.log(f'Appending time steps {earliest_date} to {latest_date} on {zarr_path}')
+    new_ds.to_zarr(zarr_path, mode='a', append_dim='time', consolidated=True, zarr_format=2)
+    cl.log('Finished appending to zarr: {zarr_path}')
+    return
+
+
 def concatenate_outputs() -> None:
     # for each unique start date, sorted in order, open/merge the files from all vpus and append to the zarr
     vpu_outputs = natsorted(glob(os.path.join(DISCHARGE_DIR, '*')))
@@ -26,31 +43,11 @@ def concatenate_outputs() -> None:
             cl.error(f"Discharge not found for {unique_output}")
             raise FileNotFoundError
 
-        with xr.open_mfdataset(discharges, combine='nested', concat_dim='river_id', parallel=True, ) as new_ds:
-            earliest_date = np.datetime_as_string(new_ds.time[0].values, unit="h")
-            latest_date = np.datetime_as_string(new_ds.time[-1].values, unit="h")
-            # load the dataset into memory from the individual files
+        with xr.open_mfdataset(discharges, combine='nested', concat_dim='river_id') as new_ds:
             new_ds.load()
-
-            # check that the time steps are not already
-            hourly_times = xr.open_zarr(HOURLY_ZARR).time.values
-            if new_ds.time.values[0] in hourly_times:
-                cl.error(f'hourly steps already present for {earliest_date} to {latest_date}. Needs human intervention.')
-                raise RuntimeError
-            cl.log(f'Appending to hourly time step zarr {earliest_date} to {latest_date}')
-            new_ds.to_zarr(HOURLY_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
-            cl.log('Finished appending to hourly zarr')
-
-            # Append daily data
+            append(new_ds=new_ds, zarr_path=HOURLY_ZARR)
             new_ds = new_ds.resample(time='1D').mean('time')
-            daily_times = xr.open_zarr(DAILY_ZARR).time.values
-            if new_ds.time.values[0] in daily_times:
-                cl.error(f'Daily data found for {earliest_date} to {latest_date}. Needs human intervention.')
-                raise RuntimeError
-            cl.log(f'Appending to daily time step zarr {earliest_date} to {latest_date}')
-            new_ds.to_zarr(DAILY_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
-            cl.log('Finished appending to daily zarr')
-
+            append(new_ds=new_ds, zarr_path=DAILY_ZARR)
     return
 
 
@@ -58,12 +55,13 @@ def verify_concatenated_outputs(zarr) -> None:
     """
     Verifies that the concatenated outputs are correct
     """
+    cl.log(f'Verifying {zarr} zarr after appending')
     with xr.open_zarr(zarr) as ds:
         time_size = ds.chunks['time'][0]
         # Test a river to see if there are nans
         if np.isnan(ds.isel(river_id=1, time=slice(time_size, -1))['Q'].values).any():
-            cl.error(f'{zarr}-contain-nans')
-            raise RuntimeError('Zarr contains nans')
+            cl.error(f'{zarr} contain nans')
+            raise RuntimeError
 
         # Verify that the time dimension is correct
         times = ds['time'].values
@@ -75,10 +73,8 @@ def verify_concatenated_outputs(zarr) -> None:
 if __name__ == '__main__':
     cl = CloudLog()
     try:
-        cl.log('concatenating-outputs')
+        cl.log('Appending new discharge to zarr files')
         concatenate_outputs()
-
-        cl.log('checking local zarr is good to go')
         for z in [DAILY_ZARR, HOURLY_ZARR]:
             verify_concatenated_outputs(z)
     except Exception as e:
