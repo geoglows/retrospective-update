@@ -30,9 +30,7 @@ class CloudLog:
         self.ping(self.log_url, message_json)
 
     def ping(self, url: str, message: dict) -> None:
-        if not url:
-            print(message["text"])
-            return
+        print(message["text"])
 
         try:
             response = requests.post(
