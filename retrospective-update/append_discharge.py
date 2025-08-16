@@ -77,6 +77,7 @@ if __name__ == '__main__':
         concatenate_outputs()
         for z in [DAILY_ZARR, HOURLY_ZARR]:
             verify_concatenated_outputs(z)
+        cl.log('Discharge zarrs updated successfully')
     except Exception as e:
         cl.error(str(e))
         cl.error(traceback.format_exc())
