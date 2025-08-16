@@ -33,13 +33,13 @@ def download_era5() -> None:
     final_date_to_simulate = today - pd.DateOffset(days=MIN_LAG_TIME_DAYS)
 
     if pd.to_datetime(last_date + np.timedelta64(MIN_LAG_TIME_DAYS, 'D')) > datetime.now():
-        cl.error(f'{last_date}-is-within-{MIN_LAG_TIME_DAYS}-days-of-today.-Stopping')
-        raise EnvironmentError('Last date in zarr is more recent than expected minimum lag time')
+        cl.error(f'Last date {last_date} is within {MIN_LAG_TIME_DAYS} days of today less than expected minimum lag time. Stopping.')
+        raise EnvironmentError
     date_range = pd.date_range(start=first_date_to_simulate, end=final_date_to_simulate, freq='D', )
 
     if not len(date_range):
         cl.error(f'No dates to download between {first_date_to_simulate} and {final_date_to_simulate}')
-        raise EnvironmentError('No dates to download')
+        raise RuntimeError
 
     # make a list of unique year and month combinations in the list, in order. CDS API wants single month retrievals
     downloads = []
@@ -57,15 +57,13 @@ def download_era5() -> None:
 
     downloaded_files = natsorted(glob.glob(os.path.join(ERA5_DIR, '*.nc')))
     if not downloaded_files:
-        # should already by caught by the previous dates check, this is redundancy
         cl.error("No ERA5 files were downloaded. Unexpected logic error determining dates to download")
-        return
+        raise RuntimeError
 
     for downloaded_file in downloaded_files:
         with xr.load_dataset(downloaded_file, chunks={'time': 'auto', 'lat': 'auto', 'lon': 'auto'}, ) as ds:
             # cdsapi does not validate that the range of dates you ask for is all available. we need to validate that we got everything we expected
             if ds['valid_time'].shape[0] == 0:
-                print(f'valid_time has no entries in file {downloaded_file}')
                 os.remove(downloaded_file)
                 continue
 
@@ -74,17 +72,16 @@ def download_era5() -> None:
                 # Remove timesteps on partial days
                 ds = ds.sel(valid_time=slice(None, np.datetime64(
                     f'{ds.valid_time[-1].values.astype("datetime64[D]")}') - np.timedelta64(1, 'h')))
-                # If there is no more time, skip this file
+                # If there is no more time after removing partial days, skip this file
                 if len(ds.valid_time) == 0:
-                    print(f'No valid time left in file {downloaded_file} after removing partial days')
                     os.remove(downloaded_file)
                     continue
                 ds.to_netcdf(downloaded_file)
 
     downloaded_files = list(natsorted(glob.glob(os.path.join(ERA5_DIR, '*.nc'))))
     if not downloaded_files:
-        cl.error("ERA5-downloaded-but-no-usable-data-obtained")
-        raise RuntimeError('No usable runoff data obtained from ERA5 download')
+        cl.error("No usable runoff data obtained from ERA5 download")
+        raise RuntimeError
 
     with xr.open_mfdataset(downloaded_files) as ds, xr.open_zarr(HOURLY_ZARR) as hourly_ds:
         # Check the time dimension
@@ -93,13 +90,13 @@ def download_era5() -> None:
         total_time = np.concatenate((retro_time, ro_time))
         difs = np.diff(total_time)
         if not np.all(difs == difs[0]):
-            cl.error("Time-dimension-of-ERA5-is-not-compatible-with-the-retrospective-zarr")
-            raise RuntimeError('Time dimension of ERA5 not consistent with routed discharge')
+            cl.error("Time dimension of ERA5 not consistent with routed discharge")
+            raise RuntimeError
 
         # Check that there are no nans
         if np.isnan(ds['ro'].values).any():
             cl.error("Invalid data found in nans")
-            raise RuntimeError('Invalid data found in nans')
+            raise RuntimeError
 
 
 def date_to_file_name(year: int, month: int, days: list[int]) -> str:
@@ -137,6 +134,6 @@ if __name__ == '__main__':
         download_era5()
         exit(0)
     except Exception as e:
-        cl.error('An error occurred while downloading ERA5 data')
+        cl.error(str(e))
         cl.error(traceback.format_exc())
         exit(1)
