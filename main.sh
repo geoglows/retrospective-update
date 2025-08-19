@@ -80,13 +80,13 @@ s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" cp "$DAILY_ZARR/*" "$S3_DAILY_Z
 
 rm -r "$DISCHARGE_DIR" "$ERA5_DIR"
 
-if python "$SCRIPTS_ROOT"/monthly_products.py; then
-  s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timeseries.zarr/*" "$S3_MONTHLY_TIMESERIES_ZARR"/
-  s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timesteps.zarr/*" "$S3_MONTHLY_TIMESTEPS_ZARR"/
-  s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$HYDROSOS_DIR/*.tif" "$S3_HYDROSOS_COGS"/
-  rm -r "$HYDROSOS_DIR"/*.tif
-else
+if ! python "$SCRIPTS_ROOT"/monthly_products.py; then
   log_and_shutdown "Failed to prepare monthly derived products. Shutting down."
 fi
+
+s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timeseries.zarr/*" "$S3_MONTHLY_TIMESERIES_ZARR"/
+s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$WORK_DIR/monthly-timesteps.zarr/*" "$S3_MONTHLY_TIMESTEPS_ZARR"/
+s5cmd --credentials-file "$AWS_CREDENTIALS_FILE" sync "$HYDROSOS_DIR/*.tif" "$S3_HYDROSOS_COGS"/
+rm -f "$HYDROSOS_DIR"/*.tif || true  # include "|| true" so that failure to remove files when they don't exist doesn't cause an early error and exit
 
 log_and_shutdown "Script completed successfully. Shutting down."
