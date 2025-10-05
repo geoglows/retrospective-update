@@ -4,6 +4,7 @@ set -Eeuo pipefail
 log_and_shutdown() {
     local message="$1"
     curl -X POST -H "Content-Type: application/json" -d "{\"text\": \"$message\"}" "$WEBHOOK_ERROR_URL" || true
+    sleep 60  # allow time to interrupt in case of retry, accidents, etc
     sudo shutdown -h now
 }
 
