@@ -52,7 +52,7 @@ def update_monthly_products(cl: CloudLog) -> None:
     cl.log('Appending to monthly timeseries')
     (
         daily_zarr
-        .chunk({'time': 1020, 'river_id': 200})
+        .chunk({'time': 1020, 'river_id': 250})
         .to_zarr(MONTHLY_TIMESERIES_ZARR, mode='a', append_dim='time', consolidated=True, zarr_format=2)
     )
     cl.log('Appending to monthly timesteps')
